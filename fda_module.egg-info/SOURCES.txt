@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+fda/__init__.py
+fda/basis.py
+fda/bezier.py
+fda/fpca.py
+fda/representation.py
+fda/smoothing.py
+fda/stats.py
+fda_module.egg-info/PKG-INFO
+fda_module.egg-info/SOURCES.txt
+fda_module.egg-info/dependency_links.txt
+fda_module.egg-info/requires.txt
+fda_module.egg-info/top_level.txt
+tests/test_basis.py
+tests/test_fpca.py
+tests/test_smoothing.py

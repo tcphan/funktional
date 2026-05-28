@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: fda_module
+Version: 0.1.0
+Summary: A lightweight Python module for Functional Data Analysis (FDA)
+License-Expression: MIT
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: scipy>=1.7.0
+Requires-Dist: scikit-learn>=1.0.0
+Requires-Dist: matplotlib>=3.4.0
+Provides-Extra: dev
+Requires-Dist: pytest>=6.0; extra == "dev"
+
+# fda_module
+
+A lightweight, clean Python library for Functional Data Analysis (FDA) built from scratch.
+
+## Features
+- **Basis Functions**: Represent functional objects using B-Spline or Fourier bases.
+- **Smoothing**: Convert discrete points to functional data curves using least squares and penalized smoothing.
+- **Descriptive Statistics**: Compute functional mean, functional variance, and functional covariance.
+- **Functional PCA**: Extract the main modes of variation via FPCA.
+
+## Installation
+Run:
+```bash
+pip install -e .
+```
