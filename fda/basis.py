@@ -126,6 +126,7 @@ class BSplineBasis(Basis):
             raise ValueError(f"n_basis ({n_basis}) must be greater than degree ({degree}).")
             
         self.degree = int(degree)
+        self.cache = None
         self._setup_knots()
 
     def _setup_knots(self):
@@ -148,22 +149,81 @@ class BSplineBasis(Basis):
             np.repeat(b, self.degree + 1)
         ])
 
+    def _b_spline_value(self, x: float, j: int, p: int):
+        """Calculates the B-spline value at x for a single basis function j of degree p.
+        
+        Parameters
+        ----------
+        x : float
+            The point at which to evaluate the basis function.
+        j : int
+            The index of the basis function.
+        p: int
+            The degree of the B-spline basis function.
+            
+        Returns
+        -------
+        float
+            The B-spline value at x for a single basis function j of degree p.
+        """
+
+        # Initialize cache on the first call
+        if self.cache is None:
+            self.cache = {}
+
+        # Create unique key to identify current recursive state
+        key = (x, j, p)
+
+        # Check if result is already in cache
+        if key in self.cache:
+            return self.cache[key]
+
+        # Base case: degree 0 (step functions)
+        if p == 0:
+            result = 1.0 if self.knots[j] <= x < self.knots[j+1] else 0.0
+            self.cache[key] = result
+            return result
+
+        # Recursive step
+        denom1 = self.knots[j+p] - self.knots[j]
+        denom2 = self.knots[j+p+1] - self.knots[j+1]
+
+        val = 0.0
+        if denom1 > 0:
+            term1_val = self._b_spline_value(x, j, p-1)
+            val += ((x - self.knots[j]) / denom1) * term1_val
+            
+        if denom2 > 0:
+            term2_val = self._b_spline_value(x, j+1, p-1)
+            val += ((self.knots[j+p+1] - x) / denom2) * term2_val
+        
+        # Store result in cache
+        self.cache[key] = val
+        return val
+
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
+        
+        # Convert to numpy array
         eval_points = np.asarray(eval_points)
-        
-        # We can evaluate all basis functions at once by passing an identity matrix
-        # as coefficients to the BSpline class.
-        c = np.eye(self.n_basis)
-        spl = BSpline(self.knots, c, self.degree, extrapolate=False)
-        
-        # SciPy's BSpline evaluates to NaN outside the knot interval.
-        # We will handle boundary issues by clamping slightly or raising a warning,
-        # but standard FDA assumes eval_points are within the domain.
-        res = spl(eval_points)
-        
-        # Replace NaNs with 0 if points are close to boundaries but slightly outside due to numerical precision
-        res = np.nan_to_num(res, nan=0.0)
-        return res
+
+        # Initialize array to store basis values
+        basis_vals = np.zeros((len(eval_points), self.n_basis))
+
+        # Evaluate each basis function
+        for j in range(self.n_basis):
+
+            # Define a helper function that evaluates a single basis function
+            def basis_step(x):
+                return self._b_spline_value(x, j, self.degree)
+            
+            # Vectorize the helper function
+            vectorized_func = np.vectorize(basis_step, otypes=[float])
+            
+            # Evaluate the vectorized function over the evaluation points
+            basis_vals[:,j] = vectorized_func(eval_points)
+            
+        return basis_vals
+
 
     def evaluate_derivative(self, eval_points: np.ndarray, order: int=1) -> np.ndarray:
         eval_points = np.asarray(eval_points)
@@ -187,8 +247,10 @@ class BSplineBasis(Basis):
                 return np.zeros((len(eval_points), self.n_basis))
             raise e
 
+
+
     def b_spline_math_notation(self, x, j):
-        """Generate the math notation for a B-spline basis function evaluation.
+        """Generates the math notation for a B-spline basis function evaluation.
         
         Parameters
         ----------
@@ -234,8 +296,8 @@ class BSplineBasis(Basis):
         math_notation_line3 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
 
         # Line 4 math notation
-        b_val1 = b_spline_step(x, j, self.degree-1, self.knots)
-        b_val2 = b_spline_step(x, j+1, self.degree-1, self.knots)
+        b_val1 = self._b_spline_step(x, j)
+        b_val2 = self._b_spline_step(x, j+1)
         part1 = f"{weight1:.4f} * {b_val1}"
         part2 = f"{weight2:.4f} * {b_val2}"
         math_notation_line4 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
