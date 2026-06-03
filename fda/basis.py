@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.interpolate import BSpline
+import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 
 class Basis(ABC):
@@ -66,7 +66,7 @@ class Basis(ABC):
         pass
 
     def penalty_matrix(self, order: int=2, n_points: int=1000) -> np.ndarray:
-        """Compute the penalty matrix of a given derivative order.
+        r"""Compute the penalty matrix of a given derivative order.
         
         The penalty matrix is defined as:
         P_{jk} = \int_a^b \phi_j^{(order)}(t) \phi_k^{(order)}(t) dt
@@ -224,7 +224,6 @@ class BSplineBasis(Basis):
             
         return basis_vals
 
-
     def evaluate_derivative(self, eval_points: np.ndarray, order: int=1) -> np.ndarray:
         eval_points = np.asarray(eval_points)
         if order < 0:
@@ -247,8 +246,46 @@ class BSplineBasis(Basis):
                 return np.zeros((len(eval_points), self.n_basis))
             raise e
 
+    def plot_b_spline(self,  eval_points: np.ndarray):
+        """Create a plot of the B-spline basis functions.
+        
+        Args:
+            eval_points: Points at which to evaluate the basis functions
+        """
 
+        # Evaluate the basis functions
+        basis_matrix = self.evaluate(eval_points)
 
+        # Create the figure and axes
+        fig, ax = plt.subplots(figsize=(12,5))
+
+        # Plot each basis function
+        for j in range(self.n_basis):
+            ax.plot(
+                eval_points,
+                basis_matrix[:,j],
+                linewidth=2,
+                label=f"B-spline {j+1}",
+                color=plt.cm.get_cmap("Set3", self.n_basis)(j)
+            )
+        
+        # Apply formatting
+        ax.set_title(
+            f"B-Spline Basis (n_basis={self.n_basis}, degree={self.degree})", 
+            fontsize=10, 
+            fontweight="bold", 
+            pad=10
+        )
+        ax.set_xlabel("$x$", fontsize=9)
+        ax.set_ylabel(r"$\phi_j(x)$", fontsize=9)
+        ax.set_ylim(-0.05, 1.05)
+        ax.legend(fontsize=9, loc="center left", bbox_to_anchor=(1.02, 0.5))
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Display the plot
+        plt.tight_layout()
+        plt.show()
+        
     def b_spline_math_notation(self, x, j):
         """Generates the math notation for a B-spline basis function evaluation.
         
