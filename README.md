@@ -1,6 +1,6 @@
-# fda_module
+# Functional Data Analysis (FDA) Package
 
-A lightweight, clean Python library for Functional Data Analysis (FDA) built from scratch.
+The goal of this project is to develop a robust Python library for performing a wide-range of Functional Data Analysis (FDA) techniques at scale and with options for user customization. Existing package is limited but contains most of the standard building blocks for performing a simple FDA. The long-term vision of this package is to eventually develop capabilities for tailoring FDA techniques to specific industries and their needs (e.g. healthcare, finance, etc.) in order to expand understanding of how FDA can be used in practice and hopefully, through the journey, shed a little more love to an often understudied corner of data science!
 
 ## Features
 - **Basis Functions**: Represent functional objects using B-Spline or Fourier bases.
@@ -11,5 +11,5 @@ A lightweight, clean Python library for Functional Data Analysis (FDA) built fro
 ## Installation
 Run:
 ```bash
-pip install -e .
+pip install -q -e ..
 ```
