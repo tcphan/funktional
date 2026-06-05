@@ -318,29 +318,29 @@ class BSplineBasis(Basis):
         # Line 1 math notation
         part1 = f"({x} - t{j_subscr}/t{j_plus_p_subscr} - t{j_subscr}) * B{j_subscr},{p_minus_1_subscr}(x={x})"
         part2 = f"(t{j_plus_p_plus_1_subscr} - {x}/t{j_plus_p_plus_1_subscr} - t{j_plus_1_subscr}) * B{j_plus_1_subscr},{p_minus_1_subscr}(x={x})"
-        math_notation_line1 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
+        math_notation_line1 = f"B{j_subscr},{p_subscr}(x={x}) = {part1} + {part2}"
 
         # Line 2 math notation
         part1 = f"({x} - {self.knots[j]}/{self.knots[j+self.degree]} - {self.knots[j]}) * B{j_subscr},{p_minus_1_subscr}(x={x})"
         part2 = f"({self.knots[j+self.degree+1]} - {x}/{self.knots[j+self.degree+1]} - {self.knots[j+1]}) * B{j_plus_1_subscr},{p_minus_1_subscr}(x={x})"
-        math_notation_line2 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
+        math_notation_line2 = f"B{j_subscr},{p_subscr}(x={x}) = {part1} + {part2}"
 
         # Line 3 math notation
         weight1 = (x - self.knots[j])/(self.knots[j+self.degree] - self.knots[j])
         weight2 = (self.knots[j+self.degree+1] - x)/(self.knots[j+self.degree+1] - self.knots[j+1])
         part1 = f"{weight1:.4f} * B{j_subscr},{p_minus_1_subscr}(x={x})"
         part2 = f"{weight2:.4f} * B{j_plus_1_subscr},{p_minus_1_subscr}(x={x})"
-        math_notation_line3 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
+        math_notation_line3 = f"B{j_subscr},{p_subscr}(x={x}) = {part1} + {part2}"
 
         # Line 4 math notation
-        b_val1 = self._b_spline_step(x, j)
-        b_val2 = self._b_spline_step(x, j+1)
+        b_val1 = self._b_spline_value(x, j, self.degree)
+        b_val2 = self._b_spline_value(x, j+1, self.degree)
         part1 = f"{weight1:.4f} * {b_val1}"
         part2 = f"{weight2:.4f} * {b_val2}"
-        math_notation_line4 = f"B{j_subscr},{p_subscr}(x=1.5) = {part1} + {part2}"
+        math_notation_line4 = f"B{j_subscr},{p_subscr}(x={x}) = {part1} + {part2}"
 
         # Line 5 math notation
-        math_notation_line5 = f"B{j_subscr},{p_subscr}(x=1.5) = {(weight1 * b_val1) + (weight2 * b_val2):.4f}"
+        math_notation_line5 = f"B{j_subscr},{p_subscr}(x={x}) = {(weight1 * b_val1) + (weight2 * b_val2):.4f}"
 
         # Combine all notation lines together
         final_math_notation = "\n".join([
