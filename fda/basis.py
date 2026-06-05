@@ -126,7 +126,6 @@ class BSplineBasis(Basis):
             raise ValueError(f"n_basis ({n_basis}) must be greater than degree ({degree}).")
             
         self.degree = int(degree)
-        self.cache = None
         self._setup_knots()
 
     def _setup_knots(self):
@@ -165,11 +164,11 @@ class BSplineBasis(Basis):
         for i in range(n_knots - 1):
 
             # Normal half-open interval: [t_i, t_{i+1})
-            is_in_interval = (x >= self.knots[i]) & (x < self.knots[i+1])
+            is_in_interval = (eval_points >= self.knots[i]) & (eval_points < self.knots[i+1])
             
             # Include the right-most boundary point (x = b) in the last valid interval
             if i == self.n_basis - 1: 
-                is_in_interval |= (x == self.knots[i+1])
+                is_in_interval |= (eval_points == self.knots[i+1])
                 
             current_basis[:, i] = is_in_interval.astype(float)
 
@@ -183,7 +182,7 @@ class BSplineBasis(Basis):
                 # Left Term Calculations
                 denom1 = self.knots[i+p] - self.knots[i]
                 if denom1 > 0:
-                    left_factor = (x - self.knots[i]) / denom1
+                    left_factor = (eval_points - self.knots[i]) / denom1
                     term1 = left_factor * current_basis[:, i]
                 else:
                     term1 = 0.0
@@ -191,7 +190,7 @@ class BSplineBasis(Basis):
                 # Right Term Calculations
                 denom2 = self.knots[i+p+1] - self.knots[i+1]
                 if denom2 > 0:
-                    right_factor = (self.knots[i+p+1] - x) / denom2
+                    right_factor = (self.knots[i+p+1] - eval_points) / denom2
                     term2 = right_factor * current_basis[:, i+1]
                 else:
                     term2 = 0.0
@@ -200,32 +199,21 @@ class BSplineBasis(Basis):
                 
             current_basis = next_basis
 
-        # Slice the resulting matrix to precisely match n_basis
+        # Return only the first n_basis columns to ensure correct output dimension
         return current_basis[:, :self.n_basis]
 
-
     def evaluate_derivative(self, eval_points: np.ndarray, order: int=1) -> np.ndarray:
-        eval_points = np.asarray(eval_points)
+
+        x = np.asarray(eval_points)
         if order < 0:
             raise ValueError("Derivative order must be non-negative.")
         if order == 0:
-            return self.evaluate(eval_points)
-            
-        c = np.eye(self.n_basis)
-        spl = BSpline(self.knots, c, self.degree, extrapolate=False)
-        
-        try:
-            spl_deriv = spl.derivative(order)
-            res = spl_deriv(eval_points)
-            res = np.nan_to_num(res, nan=0.0)
-            return res
-        except ValueError as e:
-            # If order is greater than the degree, SciPy's derivative might fail
-            # or return zero.
-            if order > self.degree:
-                return np.zeros((len(eval_points), self.n_basis))
-            raise e
+            return self.evaluate(x)
+        if order > self.degree:
+            return np.zeros((len(x), self.n_basis))
 
+        pass
+    
     def plot_b_spline(self,  eval_points: np.ndarray):
         """Create a plot of the B-spline basis functions.
         
