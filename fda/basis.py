@@ -149,86 +149,60 @@ class BSplineBasis(Basis):
             np.repeat(b, self.degree + 1)
         ])
 
-    def _b_spline_value(self, x: float, j: int, p: int):
-        """Calculates the B-spline value at x for a single basis function j of degree p.
-        
-        Parameters
-        ----------
-        x : float
-            The point at which to evaluate the basis function.
-        j : int
-            The index of the basis function.
-        p: int
-            The degree of the B-spline basis function.
-            
-        Returns
-        -------
-        float
-            The B-spline value at x for a single basis function j of degree p.
-        """
-
-        # Initialize cache on the first call
-        if self.cache is None:
-            self.cache = {}
-
-        # Create unique key to identify current recursive state
-        key = (x, j, p)
-
-        # Check if result is already in cache
-        if key in self.cache:
-            return self.cache[key]
-
-        # If index j is out of bounds, return 0.0
-        if j + p + 1 >= len(self.knots):
-            result = 0.0
-            self.cache[key] = result
-            return result
-
-        # Base case: degree 0 (step functions)
-        if p == 0:
-            result = 1.0 if self.knots[j] <= x < self.knots[j+1] else 0.0
-            self.cache[key] = result
-            return result
-
-        # Recursive step
-        denom1 = self.knots[j+p] - self.knots[j]
-        denom2 = self.knots[j+p+1] - self.knots[j+1]
-
-        val = 0.0
-        if denom1 > 0:
-            term1_val = self._b_spline_value(x, j, p-1)
-            val += ((x - self.knots[j]) / denom1) * term1_val
-            
-        if denom2 > 0:
-            term2_val = self._b_spline_value(x, j+1, p-1)
-            val += ((self.knots[j+p+1] - x) / denom2) * term2_val
-        
-        # Store result in cache
-        self.cache[key] = val
-        return val
-
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
         
         # Convert to numpy array
         eval_points = np.asarray(eval_points)
+        n_pts = len(eval_points)
 
-        # Initialize array to store basis values
-        basis_vals = np.zeros((len(eval_points), self.n_basis))
+        # Total number of basis functions at degree 0 is len(knots) - 1
+        n_knots = len(self.knots)
 
-        # Evaluate each basis function
-        for j in range(self.n_basis):
+        # Initialize Level 0 Basis Matrix (Degree = 0)
+        # B_shape will contract or adjust as degree increases, but we start with all structural intervals
+        current_basis = np.zeros((n_pts, n_knots - 1))
 
-            # Define a helper function that evaluates a single basis function
-            def basis_step(x):
-                return self._b_spline_value(x, j, self.degree)
+        for i in range(n_knots - 1):
+
+            # Normal half-open interval: [t_i, t_{i+1})
+            is_in_interval = (x >= self.knots[i]) & (x < self.knots[i+1])
             
-            # Vectorize the helper function
-            vectorized_func = np.vectorize(basis_step, otypes=[float])
+            # Include the right-most boundary point (x = b) in the last valid interval
+            if i == self.n_basis - 1: 
+                is_in_interval |= (x == self.knots[i+1])
+                
+            current_basis[:, i] = is_in_interval.astype(float)
+
+
+        # Iteratively compute higher degrees up to self.degree
+        for p in range(1, self.degree + 1):
+            next_basis = np.zeros((n_pts, n_knots - 1 - p))
             
-            # Evaluate the vectorized function over the evaluation points
-            basis_vals[:,j] = vectorized_func(eval_points)
-            
-        return basis_vals
+            for i in range(n_knots - 1 - p):
+
+                # Left Term Calculations
+                denom1 = self.knots[i+p] - self.knots[i]
+                if denom1 > 0:
+                    left_factor = (x - self.knots[i]) / denom1
+                    term1 = left_factor * current_basis[:, i]
+                else:
+                    term1 = 0.0
+                    
+                # Right Term Calculations
+                denom2 = self.knots[i+p+1] - self.knots[i+1]
+                if denom2 > 0:
+                    right_factor = (self.knots[i+p+1] - x) / denom2
+                    term2 = right_factor * current_basis[:, i+1]
+                else:
+                    term2 = 0.0
+                    
+                next_basis[:, i] = term1 + term2
+                
+            current_basis = next_basis
+
+        # Slice the resulting matrix to precisely match n_basis
+        return current_basis[:, :self.n_basis]
+
 
     def evaluate_derivative(self, eval_points: np.ndarray, order: int=1) -> np.ndarray:
         eval_points = np.asarray(eval_points)
