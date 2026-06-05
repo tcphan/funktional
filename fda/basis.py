@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.interpolate import BSpline
+import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 
 class Basis(ABC):
@@ -66,7 +66,7 @@ class Basis(ABC):
         pass
 
     def penalty_matrix(self, order: int=2, n_points: int=1000) -> np.ndarray:
-        """Compute the penalty matrix of a given derivative order.
+        r"""Compute the penalty matrix of a given derivative order.
         
         The penalty matrix is defined as:
         P_{jk} = \int_a^b \phi_j^{(order)}(t) \phi_k^{(order)}(t) dt
@@ -149,43 +149,110 @@ class BSplineBasis(Basis):
         ])
 
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
+        
+        # Convert to numpy array
         eval_points = np.asarray(eval_points)
-        
-        # We can evaluate all basis functions at once by passing an identity matrix
-        # as coefficients to the BSpline class.
-        c = np.eye(self.n_basis)
-        spl = BSpline(self.knots, c, self.degree, extrapolate=False)
-        
-        # SciPy's BSpline evaluates to NaN outside the knot interval.
-        # We will handle boundary issues by clamping slightly or raising a warning,
-        # but standard FDA assumes eval_points are within the domain.
-        res = spl(eval_points)
-        
-        # Replace NaNs with 0 if points are close to boundaries but slightly outside due to numerical precision
-        res = np.nan_to_num(res, nan=0.0)
-        return res
+        n_pts = len(eval_points)
+
+        # Total number of basis functions at degree 0 is len(knots) - 1
+        n_knots = len(self.knots)
+
+        # Initialize Level 0 Basis Matrix (Degree = 0)
+        # B_shape will contract or adjust as degree increases, but we start with all structural intervals
+        current_basis = np.zeros((n_pts, n_knots - 1))
+
+        for i in range(n_knots - 1):
+
+            # Normal half-open interval: [t_i, t_{i+1})
+            is_in_interval = (eval_points >= self.knots[i]) & (eval_points < self.knots[i+1])
+            
+            # Include the right-most boundary point (x = b) in the last valid interval
+            if i == self.n_basis - 1: 
+                is_in_interval |= (eval_points == self.knots[i+1])
+                
+            current_basis[:, i] = is_in_interval.astype(float)
+
+
+        # Iteratively compute higher degrees up to self.degree
+        for p in range(1, self.degree + 1):
+            next_basis = np.zeros((n_pts, n_knots - 1 - p))
+            
+            for i in range(n_knots - 1 - p):
+
+                # Left Term Calculations
+                denom1 = self.knots[i+p] - self.knots[i]
+                if denom1 > 0:
+                    left_factor = (eval_points - self.knots[i]) / denom1
+                    term1 = left_factor * current_basis[:, i]
+                else:
+                    term1 = 0.0
+                    
+                # Right Term Calculations
+                denom2 = self.knots[i+p+1] - self.knots[i+1]
+                if denom2 > 0:
+                    right_factor = (self.knots[i+p+1] - eval_points) / denom2
+                    term2 = right_factor * current_basis[:, i+1]
+                else:
+                    term2 = 0.0
+                    
+                next_basis[:, i] = term1 + term2
+                
+            current_basis = next_basis
+
+        # Return only the first n_basis columns to ensure correct output dimension
+        return current_basis[:, :self.n_basis]
 
     def evaluate_derivative(self, eval_points: np.ndarray, order: int=1) -> np.ndarray:
-        eval_points = np.asarray(eval_points)
+
+        x = np.asarray(eval_points)
         if order < 0:
             raise ValueError("Derivative order must be non-negative.")
         if order == 0:
-            return self.evaluate(eval_points)
-            
-        c = np.eye(self.n_basis)
-        spl = BSpline(self.knots, c, self.degree, extrapolate=False)
+            return self.evaluate(x)
+        if order > self.degree:
+            return np.zeros((len(x), self.n_basis))
+
+        pass
+    
+    def plot_b_spline(self,  eval_points: np.ndarray):
+        """Create a plot of the B-spline basis functions.
         
-        try:
-            spl_deriv = spl.derivative(order)
-            res = spl_deriv(eval_points)
-            res = np.nan_to_num(res, nan=0.0)
-            return res
-        except ValueError as e:
-            # If order is greater than the degree, SciPy's derivative might fail
-            # or return zero.
-            if order > self.degree:
-                return np.zeros((len(eval_points), self.n_basis))
-            raise e
+        Args:
+            eval_points: Points at which to evaluate the basis functions
+        """
+
+        # Evaluate the basis functions
+        basis_matrix = self.evaluate(eval_points)
+
+        # Create the figure and axes
+        fig, ax = plt.subplots(figsize=(12,5))
+
+        # Plot each basis function
+        for j in range(self.n_basis):
+            ax.plot(
+                eval_points,
+                basis_matrix[:,j],
+                linewidth=2,
+                label=f"B-spline {j+1}",
+                color=plt.cm.get_cmap("Set3", self.n_basis)(j)
+            )
+        
+        # Apply formatting
+        ax.set_title(
+            f"B-Spline Basis (n_basis={self.n_basis}, degree={self.degree})", 
+            fontsize=10, 
+            fontweight="bold", 
+            pad=10
+        )
+        ax.set_xlabel("$x$", fontsize=9)
+        ax.set_ylabel(r"$\phi_j(x)$", fontsize=9)
+        ax.set_ylim(-0.05, 1.05)
+        ax.legend(fontsize=9, loc="center left", bbox_to_anchor=(1.02, 0.5))
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Display the plot
+        plt.tight_layout()
+        plt.show()
 
 
 class FourierBasis(Basis):
