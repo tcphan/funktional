@@ -3,18 +3,59 @@ from scipy.integrate import simpson, cumtrapz
 from scipy.optimize import minimize
 
 
-
-
-
 class curveRegistration:
     """
     Class for registering curves to a target curve.
     """
-    def __init__(self, t_grid, x_basis, target_basis, warping_function):
+    def __init__(self, t_grid, x_basis, target_basis, warping_method="ramsay"):
         self.t_grid = t_grid
         self.x_basis = x_basis
         self.target_basis = target_basis
-        self.warping_function = warping_function
+        self.warping_method = warping_method.lower()
+
+    def _get_default_initial_guess(self):
+        """
+        Generates the default baseline (identity/no-warp) coefficients depending on the selected warping method.
+        """
+
+        if self.warping_method == "power":
+            # gamma = 1.0 means t^1 = t (Identity)
+            return np.array([1.0])
+            
+        elif self.warping_method == "moebius":
+            # f = 0.0 means t / (0 + 1) = t (Identity)
+            return np.array([0.0])
+            
+        elif self.warping_method == "ramsay":
+            # Ramsay's basis matrix shape depends on how many basis functions x_basis has
+            num_basis = self.x_basis.evaluate(self.t_grid).shape[1]
+            # Zero coefficients mean exp(0) = 1 (constant), integrating to a linear line (Identity)
+            return np.zeros(num_basis)
+
+        else:
+            raise ValueError(f"Unknown warping method: {self.warping_method}")
+
+    def _warping_function(self, coefficients):
+        """
+        Apply the warping function based on the specified method.
+        """
+
+        valid_methods = [
+            "power",
+            "moebius",
+            "ramsay"
+        ]
+
+        coef_val = coefficients[0] if isinstance(coefficients, (np.ndarray, list)) else coefficients
+
+        if self.warping_method == "power":
+            return self.power_warp(coef_val)
+        elif self.warping_method == "moebius":
+            return self.moebius_warp(coef_val)
+        elif self.warping_method == "ramsay":
+            return self.ramsay_warp(coefficients)
+        else:
+            raise ValueError(f"Invalid warping method '{self.warping_method}'. Choose from {valid_methods}.")
 
     def power_warp(self, gamma: float):
         """
@@ -92,7 +133,7 @@ class curveRegistration:
         h_t : ndarray
             The warped time grid.
         """
-        
+
         # Get domain range
         t_min, t_max = self.t_grid[0], self.t_grid[-1]
         
@@ -108,19 +149,24 @@ class curveRegistration:
         
         # Cumulative integral for the numerator, total integral for denominator
         # cumtrapz is used to get the running integral value at each point on the grid
-        numerator = cumtrapz(exp_W, t_grid, initial=0)
-        denominator = simpson(exp_W, x=t_grid)
+        numerator = cumtrapz(exp_W, self.t_grid, initial=0)
+        denominator = simpson(exp_W, x=self.t_grid)
         
         # Normalize and scale to boundaries
         h_t = t_min + (t_max - t_min) * (numerator / denominator)
         return h_t
 
-    def regsse(self):
+    def regsse(self, coefficients):
         r"""
         Calculates the Registration Sum of Squared Errors (REGSSE) for a single curve.
         The REGSSE measures how well a warping function h(t) aligns a subject curve x(t) with the target curve \mu(t).
         
         REGSSE = integral_{t_a}^{t_b} [x(h(t)) - \mu(t)]^2 dt
+
+        Parameters
+        ----------
+        coefficients : array_like
+            The weights used by the warping function to transform the time grid.
             
         Returns:
         --------
@@ -129,7 +175,7 @@ class curveRegistration:
         """
 
         # Evaluate warping function on the fine grid
-        h_t = self.warping_function(self.t_grid)
+        h_t = self._warping_function(coefficients)
         
         # Ensure h(t) is strictly increasing and within bounds
         h_t = np.clip(h_t, self.t_grid[0], self.t_grid[-1])
@@ -145,7 +191,7 @@ class curveRegistration:
         sse = simpson(squared_errors, x=self.t_grid)
         return sse
 
-    def optimize(self, initial_guess, method='L-BFGS-B'):
+    def optimize(self, initial_guess=None, optimization_method='L-BFGS-B'):
         """
         Optimizes the warping function to minimize the REGSSE.
         
@@ -153,7 +199,7 @@ class curveRegistration:
         -----------
         initial_guess : array-like
             The initial guess for the warping function coefficients.
-        method : str
+        optimization_method : str
             The optimization method to use.
             
         Returns:
@@ -161,6 +207,24 @@ class curveRegistration:
         result : OptimizeResult
             The optimization result.
         """
-        result = minimize(self.regsse, initial_guess, method=method)
+
+        if initial_guess is None:
+            initial_guess = self._get_default_initial_guess()
+
+        # For certain warping methods (e.g. power, moebius), it helps to bound the optimizer step-sizes so it doesn't try negative exponents or asymptotic boundaries
+        bounds = None
+        if optimization_method in ["L-BFGS-B", "SLSQP", "Trust-Region"]:
+            if self.warping_method == "power":
+                bounds = [(1e-3, 10.0)]
+            elif self.warping_method == "moebius":
+                bounds = [(-0.95, 0.95)]
+
+        # Minimize the REGSSE
+        result = minimize(
+            fun=self.regsse,         # Registration SSE objective function
+            x0=initial_guess,        # Starting guess
+            method=optimization_method,           # Optimization method
+            bounds=bounds            # Bounds for the coefficients
+        )
         return result
     
