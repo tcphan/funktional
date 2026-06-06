@@ -24,8 +24,8 @@ class curveRegistration:
         -----------
         gamma : float
             The warping function parameter. Must be strictly positive (gamma > 0).
-            - gamma > 1: expands the beginning of the curve and compresses the end (shifts curve left or delays features)
-            - gamma < 1: compresses the beginning of the curve and expands the end (shifts curve right or accelerates features)
+            - gamma > 1: expands the beginning of the curve and compresses the end (shifts curve left)
+            - gamma < 1: compresses the beginning of the curve and expands the end (shifts curve right)
             
         Returns:
         --------
@@ -44,6 +44,36 @@ class curveRegistration:
         h_norm = t_norm ** gamma
         
         # Rescale back to original time domain
+        return t_min + (t_max - t_min) * h_norm
+
+    def moebius_warp(self, f: float):
+        """
+        Möbius warping function.
+
+        Parameters
+        ----------
+        f : float
+            The warping function parameter. Must be strictly greater than -1 to avoid division by zero/negative slopes.
+            - f > 0: shifts the curve to the left
+            - f < 0: shifts the curve to the right
+
+        Returns
+        -------
+        h_t : ndarray
+            The warped time grid.
+        """
+
+        # Force parameter into a safe strictly monotonic range (-0.99, 0.99)
+        f = np.clip(f, -0.99, 0.99)
+            
+        # Normalize t_grid to [0, 1]
+        t_min, t_max = self.t_grid[0], self.t_grid[-1]
+        t_norm = (self.t_grid - t_min) / (t_max - t_min)
+        
+        # Apply transformation
+        h_norm = t_norm / (f * t_norm + (1 - f))
+        
+        # Scale back to original domain
         return t_min + (t_max - t_min) * h_norm
 
     def regsse(self):
