@@ -4,6 +4,7 @@ fda/__init__.py
 fda/basis.py
 fda/bezier.py
 fda/fpca.py
+fda/registration.py
 fda/representation.py
 fda/smoothing.py
 fda/stats.py
