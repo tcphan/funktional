@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.integrate import simpson
+from scipy.optimize import minimize
 
 
 class curveRegistration:
@@ -12,7 +13,6 @@ class curveRegistration:
         self.target_basis = target_basis
         self.warping_function = warping_function
 
-        
     def regsse(self):
         r"""
         Calculates the Registration Sum of Squared Errors (REGSSE) for a single curve.
@@ -42,3 +42,23 @@ class curveRegistration:
         # Integrate over the domain using Simpson's rule to get the SSE
         sse = simpson(squared_errors, x=self.t_grid)
         return sse
+
+    def optimize(self, initial_guess, method='L-BFGS-B'):
+        """
+        Optimizes the warping function to minimize the REGSSE.
+        
+        Parameters:
+        -----------
+        initial_guess : array-like
+            The initial guess for the warping function coefficients.
+        method : str
+            The optimization method to use.
+            
+        Returns:
+        --------
+        result : OptimizeResult
+            The optimization result.
+        """
+        result = minimize(self.regsse, initial_guess, method=method)
+        return result
+    
