@@ -1,6 +1,9 @@
 import numpy as np
-from scipy.integrate import simpson
+from scipy.integrate import simpson, cumtrapz
 from scipy.optimize import minimize
+
+
+
 
 
 class curveRegistration:
@@ -12,6 +15,36 @@ class curveRegistration:
         self.x_basis = x_basis
         self.target_basis = target_basis
         self.warping_function = warping_function
+
+    def power_warp(self, gamma: float):
+        """
+        Power transformation warping function.
+
+        Parameters
+        -----------
+        gamma : float
+            The warping function parameter. Must be strictly positive (gamma > 0).
+            - gamma > 1: expands the beginning of the curve and compresses the end (shifts curve left or delays features)
+            - gamma < 1: compresses the beginning of the curve and expands the end (shifts curve right or accelerates features)
+            
+        Returns:
+        --------
+        h_t : ndarray
+            The warped time grid.
+        """
+        
+        # Ensure gamma is positive
+        gamma = max(1e-3, gamma)
+        
+        # Normalize the time grid to [0, 1]
+        t_min, t_max = self.t_grid[0], self.t_grid[-1]  
+        t_norm = (self.t_grid - t_min) / (t_max - t_min)
+        
+        # Apply power transformation
+        h_norm = t_norm ** gamma
+        
+        # Rescale back to original time domain
+        return t_min + (t_max - t_min) * h_norm
 
     def regsse(self):
         r"""
