@@ -65,7 +65,7 @@ class curveRegistration:
 
         # Force parameter into a safe strictly monotonic range (-0.99, 0.99)
         f = np.clip(f, -0.99, 0.99)
-            
+
         # Normalize t_grid to [0, 1]
         t_min, t_max = self.t_grid[0], self.t_grid[-1]
         t_norm = (self.t_grid - t_min) / (t_max - t_min)
@@ -75,6 +75,45 @@ class curveRegistration:
         
         # Scale back to original domain
         return t_min + (t_max - t_min) * h_norm
+
+    def ramsay_warp(self, coefficients):
+        """
+        Strictly monotonic warping function as defined by Ramsay. Rather than forcing the warping function 
+        to be strictly monotonic through constraints, Ramsay's method models the transformation as the 
+        cumulative integral of a positive function. This ensures monotonicity without explicit constraints.
+
+        Parameters
+        ----------
+        coefficients : array_like
+            The weights for the basis functions.
+        
+        Returns
+        -------
+        h_t : ndarray
+            The warped time grid.
+        """
+        
+        # Get domain range
+        t_min, t_max = self.t_grid[0], self.t_grid[-1]
+        
+        # Compute the B-spline basis matrix for the current time grid
+        # The B-spline basis matrix has shape (len(t_grid), num_basis_functions)
+        basis_matrix = self.x_basis.evaluate(self.t_grid)
+
+        # W(t) is an unconstrained linear combination of basis functions
+        W = basis_matrix @ coefficients
+        
+        # exp(W(t)) is guaranteed to be strictly positive
+        exp_W = np.exp(W)
+        
+        # Cumulative integral for the numerator, total integral for denominator
+        # cumtrapz is used to get the running integral value at each point on the grid
+        numerator = cumtrapz(exp_W, t_grid, initial=0)
+        denominator = simpson(exp_W, x=t_grid)
+        
+        # Normalize and scale to boundaries
+        h_t = t_min + (t_max - t_min) * (numerator / denominator)
+        return h_t
 
     def regsse(self):
         r"""
