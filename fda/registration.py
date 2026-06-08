@@ -14,6 +14,7 @@ class warpingFunction:
     def __call__(self, coefficients):
         return self.warp(coefficients)
 
+
 class powerWarp(warpingFunction):
     """
     Power transformation warping function.
@@ -60,6 +61,7 @@ class powerWarp(warpingFunction):
         # Rescale back to original time domain
         return self.t_min + (self.t_max - self.t_min) * h_norm
 
+
 class mobiusWarp(warpingFunction):
     """
     Möbius transformation warping function.
@@ -103,6 +105,7 @@ class mobiusWarp(warpingFunction):
         
         # Rescale back to original time domain
         return self.t_min + (self.t_max - self.t_min) * h_norm
+
 
 class ramsayWarp(warpingFunction):
     """
@@ -161,11 +164,49 @@ class curveRegistration:
     """
     Class for registering curves to a target curve.
     """
-    def __init__(self, t_grid, x_basis, target, warping_method="ramsay"):
+
+    def __init__(self, t_grid, x_basis, target_basis, x_coefs, target_coefs, warping_method, **kwargs):
+        """
+        Initialize the curveRegistration class.
+
+        Parameters
+        ----------
+        t_grid : array_like
+            The time grid.
+        x_basis : fda.basis.Basis
+            The basis object.
+        target_basis : fda.basis.Basis
+            The target curve.
+        x_coefs : ndarray
+            The coefficients of the curve to be registered.
+        target_coefs : ndarray
+            The coefficients of the target curve.
+        warping_method : str
+            The warping method to use.
+        kwargs : dict
+            Additional keyword arguments.
+        """
+
+
         self.t_grid = t_grid
+        self.t_min = t_grid[0]
+        self.t_max = t_grid[-1]
         self.x_basis = x_basis
-        self.target = target
+        self.target_basis = target_basis
+        self.x_coefs = x_coefs
+        self.target_coefs = target_coefs
         self.warping_method = warping_method.lower()
+
+        # Ensure valid warping method is provided
+        valid_warping_methods = ["power", "mobius", "ramsay"]
+        if self.warping_method not in valid_warping_methods:
+            raise ValueError(f"Invalid warping method '{warping_method}'. Choose from {valid_warping_methods}.")
+
+        # Ensure basis object is provided for Ramsay warping
+        self.ramsay_basis = kwargs.get("ramsay_basis", None)
+        if (self.warping_method == "ramsay") and (self.ramsay_basis is None):
+            raise ValueError("Ramsay warping requires a basis object. Please provide one under the keyword argument 'ramsay_basis'.")
+
 
     def _get_default_initial_guess(self):
         """
@@ -176,40 +217,31 @@ class curveRegistration:
             # gamma = 1.0 means t^1 = t (Identity)
             return np.array([1.0])
             
-        elif self.warping_method == "moebius":
+        elif self.warping_method == "mobius":
             # f = 0.0 means t / (0 + 1) = t (Identity)
             return np.array([0.0])
             
         elif self.warping_method == "ramsay":
             # Ramsay's basis matrix shape depends on how many basis functions x_basis has
-            num_basis = self.x_basis.evaluate(self.t_grid).shape[1]
+            num_basis = self.ramsay_basis.n_basis
             # Zero coefficients mean exp(0) = 1 (constant), integrating to a linear line (Identity)
             return np.zeros(num_basis)
 
-        else:
-            raise ValueError(f"Unknown warping method: {self.warping_method}")
 
-    def _warping_function(self, coefficients):
+    def _warping_function(self, warping_params):
         """
         Apply the warping function based on the specified method.
         """
 
-        valid_methods = [
-            "power",
-            "moebius",
-            "ramsay"
-        ]
-
-        coef_val = coefficients[0] if isinstance(coefficients, (np.ndarray, list)) else coefficients
-
         if self.warping_method == "power":
-            return self.power_warp(coef_val)
-        elif self.warping_method == "moebius":
-            return self.moebius_warp(coef_val)
+            return powerWarp(self.t_grid).warp(warping_params)
+
+        elif self.warping_method == "mobius":
+            return mobiusWarp(self.t_grid).warp(warping_params)
+
         elif self.warping_method == "ramsay":
-            return self.ramsay_warp(coefficients)
-        else:
-            raise ValueError(f"Invalid warping method '{self.warping_method}'. Choose from {valid_methods}.")
+            return ramsayWarp(self.t_grid, self.ramsay_basis).warp(warping_params)
+
 
     def regsse(self, coefficients):
         r"""
@@ -221,7 +253,7 @@ class curveRegistration:
         Parameters
         ----------
         coefficients : array_like
-            The weights used by the warping function to transform the time grid.
+            Parameters required for the warping function (e.g., gamma for power, f for Möbius, or coefficients for Ramsay).
             
         Returns:
         --------
@@ -236,9 +268,9 @@ class curveRegistration:
         h_t = np.clip(h_t, self.t_grid[0], self.t_grid[-1])
         
         # Evaluate the registered (warped) curve: x_i(h_i(t))
-        x_registered = self.x_basis.evaluate(h_t)
-        mu_t = self.target
-        
+        mu_t = self.target_basis.evaluate(self.t_grid) @ self.target_coefs
+        x_registered = self.x_basis.evaluate(h_t) @ self.x_coefs
+
         # Compute the squared differences
         squared_errors = (x_registered - mu_t) ** 2
         
@@ -265,21 +297,23 @@ class curveRegistration:
 
         if initial_guess is None:
             initial_guess = self._get_default_initial_guess()
+        else:
+            initial_guess = np.atleast_1d(initial_guess)
 
-        # For certain warping methods (e.g. power, moebius), it helps to bound the optimizer step-sizes so it doesn't try negative exponents or asymptotic boundaries
+        # For certain warping methods (e.g. power, mobius), it helps to bound the optimizer step-sizes so it doesn't try negative exponents or asymptotic boundaries
         bounds = None
         if optimization_method in ["L-BFGS-B", "SLSQP", "Trust-Region"]:
             if self.warping_method == "power":
                 bounds = [(1e-3, 10.0)]
-            elif self.warping_method == "moebius":
+            elif self.warping_method == "mobius":
                 bounds = [(-0.95, 0.95)]
 
         # Minimize the REGSSE
         result = minimize(
-            fun=self.regsse,         # Registration SSE objective function
-            x0=initial_guess,        # Starting guess
-            method=optimization_method,           # Optimization method
-            bounds=bounds            # Bounds for the coefficients
+            fun=self.regsse,                    # Registration SSE objective function
+            x0=initial_guess,                   # Initial guess
+            method=optimization_method,         # Optimization method
+            bounds=bounds                       # Boundaries for the warping function parameters
         )
         return result
     
