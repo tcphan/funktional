@@ -117,6 +117,7 @@ class BSplineBasis(Basis):
         n_basis: int,
         degree: int = 3,
         weight_type: str = "linear",
+        p_func=None,
     ):
         """Initialize B-spline basis.
 
@@ -133,23 +134,38 @@ class BSplineBasis(Basis):
             - "linear": Linear weights.
             - "trigonometric": Trigonometric weights.
             - "hyperbolic": Hyperbolic weights
-            - "NURBS": NURBS weights.
+            - "variable_degree": Variable degree or fractional weighting where the degree p is a function of x.
+        p_func : callable, default=None
+            Function that computes the degree as a function of x. This is only used when weight_type is "variable_degree".
         """
 
         super().__init__(domain_range, n_basis)
         self.degree = int(degree)
         self._setup_knots()
         self.weight_type = weight_type.lower()
+        self.p_func = p_func
 
         if degree < 0:
             raise ValueError("degree must be a non-negative integer.")
+
         if n_basis <= degree:
             raise ValueError(
                 f"n_basis ({n_basis}) must be greater than degree ({degree})."
             )
-        if self.weight_type not in ["linear", "trigonometric", "hyperbolic", "nurbs"]:
+
+        if self.weight_type not in [
+            "linear",
+            "trigonometric",
+            "hyperbolic",
+            "variable_degree",
+        ]:
             raise ValueError(
-                f"weight_type ({self.weight_type}) must be one of 'linear', 'trigonometric', 'hyperbolic', or 'nurbs'."
+                f"weight_type ({self.weight_type}) must be one of 'linear', 'trigonometric', 'hyperbolic', or 'variable_degree'."
+            )
+
+        if self.weight_type == "variable_degree" and self.p_func is None:
+            raise ValueError(
+                "p_func must be provided when weight_type is 'variable_degree'."
             )
 
     def _setup_knots(self):
@@ -268,6 +284,44 @@ class BSplineBasis(Basis):
         )
         return left_factor, right_factor
 
+    def _variable_degree_weights(self, eval_points: np.ndarray, i: int):
+        """
+        Calculates variable degree weights where the degree p is a function of x.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The variable degree weights for the basis function.
+        """
+
+        t = self.knots
+        x = np.asarray(eval_points)
+
+        # Evaluate the degree function at all points
+        p_x = self.p_func(x)  # Vector of floats matching x's length
+
+        # Compute dynamic structural indices safely using array boundaries
+        # Note: t[i + p] becomes non-trivial if index arithmetic uses floats.
+        # Thus, index lookups must use the ceiling integer of the local degree function.
+        p_idx = np.ceil(p_x).astype(int)
+
+        # Vectorized boundary checks across the knot vector arrays
+        denom1 = t[i + p_idx] - t[i]
+        denom2 = t[i + p_idx + 1] - t[i + 1]
+
+        # Calculate left and right factor matrices safely using np.where
+        left_factor = np.where(denom1 > 0, (x - t[i]) / denom1, 0.0)
+        right_factor = np.where(denom2 > 0, (t[i + p_idx + 1] - x) / denom2, 0.0)
+
+        return left_factor, right_factor
+
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
 
         # Convert to numpy array
@@ -308,8 +362,10 @@ class BSplineBasis(Basis):
                     left_factor, right_factor = self._hyperbolic_weights(
                         eval_points, i, p
                     )
-                elif self.weight_type == "nurbs":
-                    left_factor, right_factor = self._nurbs_weights(eval_points, i, p)
+                elif self.weight_type == "variable_degree":
+                    left_factor, right_factor = self._variable_degree_weights(
+                        eval_points, i, p
+                    )
 
                 term1 = left_factor * current_basis[:, i]
                 term2 = right_factor * current_basis[:, i + 1]
