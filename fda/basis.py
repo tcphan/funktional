@@ -202,6 +202,37 @@ class BSplineBasis(Basis):
 
         return left_factor, right_factor
 
+    def _trigonometric_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the trigonometric weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The trigonometric weights for the basis function.
+        """
+
+        t = self.knots
+
+        # Component 1: Left Factor Blending
+        denom1 = np.sin((t[i + p] - t[i]) / 2.0)
+        left_factor = np.sin((eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+
+        # Component 2: Right Factor Blending
+        denom2 = np.sin((t[i + p + 1] - t[i + 1]) / 2.0)
+        right_factor = (
+            np.sin((t[i + p + 1] - eval_points) / 2.0) / denom2 if denom2 > 0 else 0.0
+        )
+        return left_factor, right_factor
+
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
 
         # Convert to numpy array
