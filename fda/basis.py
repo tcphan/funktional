@@ -192,10 +192,12 @@ class BSplineBasis(Basis):
             The linear weights for the basis function.
         """
 
+        # Component 1: Left Factor Blending
         denom1 = self.knots[i + p] - self.knots[i]
-        denom2 = self.knots[i + p + 1] - self.knots[i + 1]
-
         left_factor = (eval_points - self.knots[i]) / denom1 if denom1 > 0 else 0.0
+
+        # Component 2: Right Factor Blending
+        denom2 = self.knots[i + p + 1] - self.knots[i + 1]
         right_factor = (
             (self.knots[i + p + 1] - eval_points) / denom2 if denom2 > 0 else 0.0
         )
@@ -230,6 +232,39 @@ class BSplineBasis(Basis):
         denom2 = np.sin((t[i + p + 1] - t[i + 1]) / 2.0)
         right_factor = (
             np.sin((t[i + p + 1] - eval_points) / 2.0) / denom2 if denom2 > 0 else 0.0
+        )
+        return left_factor, right_factor
+
+    def _hyperbolic_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the hyperbolic weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The hyperbolic weights for the basis function.
+        """
+
+        t = self.knots
+
+        # Component 1: Left Factor Blending
+        denom1 = np.sinh((t[i + p] - t[i]) / 2.0)
+        left_factor = (
+            np.sinh((eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+        )
+
+        # Component 2: Right Factor Blending
+        denom2 = np.sinh((t[i + p + 1] - t[i + 1]) / 2.0)
+        right_factor = (
+            np.sinh((t[i + p + 1] - eval_points) / 2.0) / denom2 if denom2 > 0 else 0.0
         )
         return left_factor, right_factor
 
