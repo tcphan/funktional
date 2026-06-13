@@ -165,7 +165,7 @@ class curveRegistration:
     Class for registering curves to a target curve.
     """
 
-    def __init__(self, t_grid, x_basis, target_basis, x_coefs, target_coefs, warping_method, **kwargs):
+    def __init__(self, t_grid, x_basis, target_basis, x_coefs, target_coefs, warping_method, lam = 0.0, **kwargs):
         """
         Initialize the curveRegistration class.
 
@@ -183,6 +183,8 @@ class curveRegistration:
             The coefficients of the target curve.
         warping_method : str
             The warping method to use.
+        lam : float
+            The regularization parameter.
         kwargs : dict
             Additional keyword arguments.
         """
@@ -196,6 +198,7 @@ class curveRegistration:
         self.x_coefs = x_coefs
         self.target_coefs = target_coefs
         self.warping_method = warping_method.lower()
+        self.lam = lam
 
         # Ensure valid warping method is provided
         valid_warping_methods = ["power", "mobius", "ramsay"]
@@ -242,13 +245,57 @@ class curveRegistration:
         elif self.warping_method == "ramsay":
             return ramsayWarp(self.t_grid, self.ramsay_basis).warp(warping_params)
 
+    def _regularization_penalty(self, coefficients):
+        """
+        Calculates the penalty term for the cost function to impose smoothness on the warping function (regularization).
+        Implements different penalties depending on the chosen warping method.
+
+        Parameters
+        ----------
+        coefficients : array_like
+            The coefficients of the warping function.
+
+        Interpretations:
+        ----------------
+        For Power and Mobius, because they rely on a scalar parameter (gamma and f respectively), the penalty is based on deviations from their
+        respective identity values, which represents the least amount of warping.
+        
+        For Ramsay, because it uses a basis expansion to model the warping function, the penalty is based on the squared second derivative of the warping
+        function, which penalizes roughness or deviations from a straight line (identity).
+
+        Returns
+        -------
+        penalty : float
+            The regularization penalty.
+        """
+
+        if self.warping_method == "power":
+            # Penalize deviation from gamma = 1.0 (identity)
+            return (coefficients[0] - 1.0) ** 2
+        
+        if self.warping_method == "mobius":
+            # Penalize deviation from f = 0.0 (identity)
+            return (coefficients[0] ** 2)
+        
+        if self.warping_method == "ramsay":
+            # Calculate the second derivative for smoothness penalty
+            h_t = self._warping_function(coefficients)
+            dt = self.t_grid[1] - self.t_grid[0]
+            h_prime_prime = np.gradient(np.gradient(h_t, dt), dt)
+
+            # Smoothness penalty (squared L2 norm)
+            smoothness_penalty = np.sum(h_prime_prime**2) * dt
+            return smoothness_penalty
+    
 
     def regsse(self, coefficients):
         r"""
         Calculates the Registration Sum of Squared Errors (REGSSE) for a single curve.
         The REGSSE measures how well a warping function h(t) aligns a subject curve x(t) with the target curve \mu(t).
+        A penalty term R(h) is added to the REGSSE to ensure the warping function is smooth and to prevent excessive stretching or compressing.
+        The lambda parameter controls the amount of regularization: a larger lambda will result in a smoother warping function.
         
-        REGSSE = integral_{t_a}^{t_b} [x(h(t)) - \mu(t)]^2 dt
+        REGSSE = integral_{t_a}^{t_b} [x(h(t)) - \mu(t)]^2 dt + lambda * R(h)
 
         Parameters
         ----------
@@ -276,7 +323,11 @@ class curveRegistration:
         
         # Integrate over the domain using Simpson's rule to get the SSE
         sse = simpson(squared_errors, x=self.t_grid)
-        return sse
+
+        # Retrieve penalty term
+        penalty = self._regularization_penalty(coefficients)
+
+        return sse + self.lam * penalty
 
     def optimize(self, initial_guess=None, optimization_method='L-BFGS-B'):
         """
