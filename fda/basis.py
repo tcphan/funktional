@@ -292,7 +292,7 @@ class BSplineBasis(Basis):
             # Base case: evaluate the basis functions at the correct lower degree
             if p_current == self.degree - order:
                 # Evaluate the lower degree basis on our EXACT same knot vector.
-                return _evaluate_raw_basis(x, p_current, current_n_basis)
+                return _evaluate_raw_basis(x, p_current, current_n_basis, t)
 
             # Initialize array for this recursive layer
             deriv = np.zeros((n_samples, current_n_basis))
