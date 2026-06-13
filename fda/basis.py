@@ -112,7 +112,12 @@ class BSplineBasis(Basis):
     """B-spline basis functions over a domain."""
 
     def __init__(
-        self, domain_range: tuple[float, float], n_basis: int, degree: int = 3
+        self,
+        domain_range: tuple[float, float],
+        n_basis: int,
+        degree: int = 3,
+        weight_type: str = "linear",
+        p_func=None,
     ):
         """Initialize B-spline basis.
 
@@ -124,17 +129,48 @@ class BSplineBasis(Basis):
             Number of basis functions. Must be greater than `degree`.
         degree : int, default=3
             Degree of the B-splines (e.g., 3 for cubic splines).
+        weight_type : str, default="linear"
+            Type of weights to use for the B-spline basis functions.
+            - "linear": Linear weights.
+            - "trigonometric": Trigonometric weights.
+            - "hyperbolic": Hyperbolic weights
+            - "variable_degree": Variable degree or fractional weighting where the degree p is a function of x.
+        p_func : callable, default=None
+            Function that computes the degree as a function of x. This is only used when weight_type is "variable_degree".
         """
+
         super().__init__(domain_range, n_basis)
+        self.degree = int(degree)
+        self._setup_knots()
+        self.weight_type = weight_type.lower()
+        self.p_func = p_func
+
+        # Scale frequency so the total width fits nicely within pi radians
+        width = self.domain_range[1] - self.domain_range[0]
+        self.omega = np.pi / width if width > 0 else 1.0
+
         if degree < 0:
             raise ValueError("degree must be a non-negative integer.")
+
         if n_basis <= degree:
             raise ValueError(
                 f"n_basis ({n_basis}) must be greater than degree ({degree})."
             )
 
-        self.degree = int(degree)
-        self._setup_knots()
+        if self.weight_type not in [
+            "linear",
+            "trigonometric",
+            "hyperbolic",
+            "variable_degree",
+        ]:
+            raise ValueError(
+                f"weight_type ({self.weight_type}) must be one of 'linear', 'trigonometric', 'hyperbolic', or 'variable_degree'."
+            )
+
+        if self.weight_type == "variable_degree" and self.p_func is None:
+            raise ValueError(
+                "p_func must be provided when weight_type is 'variable_degree'."
+            )
 
     def _setup_knots(self):
         """Setup the knot vector for B-splines."""
@@ -158,154 +194,328 @@ class BSplineBasis(Basis):
             ]
         )
 
+    def _evaluate_raw_basis(self, x, degree, n_basis_funcs, knots):
+        """
+        Helper method to evaluate arbitrary degree splines on a raw knot vector,
+        supporting linear, trigonometric, and hyperbolic weighting structures.
+        """
+
+        n_pts = len(x)
+        n_knots = len(knots)
+        w = self.omega  # Local reference to the domain frequency scale factor
+
+        # --- Layer 0: Characteristic Step Functions ---
+        current_basis = np.zeros((n_pts, n_knots - 1))
+        for i in range(n_knots - 1):
+            is_in_interval = (x >= knots[i]) & (x < knots[i + 1])
+            if i == n_knots - 2:
+                is_in_interval |= x == knots[i + 1]
+            current_basis[:, i] = is_in_interval.astype(float)
+
+        # --- Layers 1 to Degree: Pyramid Recurrence Iteration ---
+        for p in range(1, degree + 1):
+            next_basis = np.zeros((n_pts, n_knots - 1 - p))
+            for i in range(n_knots - 1 - p):
+                # --- Branch A: Standard Linear Weights ---
+                if self.weight_type == "linear":
+                    denom1 = knots[i + p] - knots[i]
+                    left_factor = (x - knots[i]) / denom1 if denom1 > 0 else 0.0
+
+                    denom2 = knots[i + p + 1] - knots[i + 1]
+                    right_factor = (
+                        (knots[i + p + 1] - x) / denom2 if denom2 > 0 else 0.0
+                    )
+
+                # --- Branch B: Trigonometric (GB-Spline) Weights ---
+                elif self.weight_type == "trigonometric":
+                    denom1 = np.sin(w * (knots[i + p] - knots[i]) / 2.0)
+                    left_factor = (
+                        np.sin(w * (x - knots[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+                    )
+
+                    denom2 = np.sin(w * (knots[i + p + 1] - knots[i + 1]) / 2.0)
+                    right_factor = (
+                        np.sin(w * (knots[i + p + 1] - x) / 2.0) / denom2
+                        if denom2 > 0
+                        else 0.0
+                    )
+
+                # --- Branch C: Hyperbolic Weights ---
+                elif self.weight_type == "hyperbolic":
+                    denom1 = (
+                        np.path.sinh(w * (knots[i + p] - knots[i]) / 2.0)
+                        if hasattr(np.path, "sinh")
+                        else np.sinh(w * (knots[i + p] - knots[i]) / 2.0)
+                    )
+                    left_factor = (
+                        np.sinh(w * (x - knots[i]) / 2.0) / denom1
+                        if denom1 > 0
+                        else 0.0
+                    )
+
+                    denom2 = np.sinh(w * (knots[i + p + 1] - knots[i + 1]) / 2.0)
+                    right_factor = (
+                        np.sinh(w * (knots[i + p + 1] - x) / 2.0) / denom2
+                        if denom2 > 0
+                        else 0.0
+                    )
+                # --- Fallback safety branch ---
+                else:
+                    denom1 = knots[i + p] - knots[i]
+                    left_factor = (x - knots[i]) / denom1 if denom1 > 0 else 0.0
+                    denom2 = knots[i + p + 1] - knots[i + 1]
+                    right_factor = (
+                        (knots[i + p + 1] - x) / denom2 if denom2 > 0 else 0.0
+                    )
+
+                # Blend the adjacent lower degree basis states
+                term1 = left_factor * current_basis[:, i]
+                term2 = right_factor * current_basis[:, i + 1]
+                next_basis[:, i] = term1 + term2
+
+            current_basis = next_basis
+
+        return current_basis[:, :n_basis_funcs]
+
+    def _linear_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the linear weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The linear weights for the basis function.
+        """
+
+        # Component 1: Left Factor Blending
+        denom1 = self.knots[i + p] - self.knots[i]
+        left_factor = (eval_points - self.knots[i]) / denom1 if denom1 > 0 else 0.0
+
+        # Component 2: Right Factor Blending
+        denom2 = self.knots[i + p + 1] - self.knots[i + 1]
+        right_factor = (
+            (self.knots[i + p + 1] - eval_points) / denom2 if denom2 > 0 else 0.0
+        )
+
+        return left_factor, right_factor
+
+    def _trigonometric_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the trigonometric weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The trigonometric weights for the basis function.
+        """
+
+        t = self.knots
+        w = self.omega
+
+        # Component 1: Left Factor Blending
+        denom1 = np.sin(w * (t[i + p] - t[i]) / 2.0)
+        left_factor = (
+            np.sin(w * (eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+        )
+
+        # Component 2: Right Factor Blending
+        denom2 = np.sin(w * (t[i + p + 1] - t[i + 1]) / 2.0)
+        right_factor = (
+            np.sin(w * (t[i + p + 1] - eval_points) / 2.0) / denom2
+            if denom2 > 0
+            else 0.0
+        )
+        return left_factor, right_factor
+
+    def _hyperbolic_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the hyperbolic weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The hyperbolic weights for the basis function.
+        """
+
+        t = self.knots
+        w = self.omega
+
+        # Component 1: Left Factor Blending
+        denom1 = np.sinh(w * (t[i + p] - t[i]) / 2.0)
+        left_factor = (
+            np.sinh(w * (eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+        )
+
+        # Component 2: Right Factor Blending
+        denom2 = np.sinh(w * (t[i + p + 1] - t[i + 1]) / 2.0)
+        right_factor = (
+            np.sinh(w * (t[i + p + 1] - eval_points) / 2.0) / denom2
+            if denom2 > 0
+            else 0.0
+        )
+        return left_factor, right_factor
+
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
 
         # Convert to numpy array
         eval_points = np.asarray(eval_points)
         n_pts = len(eval_points)
 
-        # Total number of basis functions at degree 0 is len(knots) - 1
-        n_knots = len(self.knots)
+        # --- Handle Variable Degree Splines via Continuous Blending ---
 
-        # Initialize Level 0 Basis Matrix (Degree = 0)
-        # B_shape will contract or adjust as degree increases, but we start with all structural intervals
+        if self.weight_type == "variable_degree":
+            p_values = self.p_func(eval_points)
+            p_floor = np.floor(p_values).astype(int)
+            p_ceil = np.ceil(p_values).astype(int)
+            alpha = p_values - p_floor
+
+            # Use the robust recursive raw basis evaluator built for derivatives
+            basis_cache = {}
+            for deg in np.unique(np.concatenate([p_floor, p_ceil])):
+                if deg <= self.degree:
+                    basis_cache[deg] = self._evaluate_raw_basis(
+                        eval_points, deg, self.n_basis, self.knots
+                    )
+                else:
+                    raise ValueError(
+                        f"Requested variable degree {deg} exceeds maximum configured degree {self.degree}"
+                    )
+
+            # Linearly blend spatial states
+            res = np.zeros((n_pts, self.n_basis))
+            for idx in range(n_pts):
+                f_deg = p_floor[idx]
+                c_deg = p_ceil[idx]
+                a = alpha[idx]
+                res[idx, :] = (1.0 - a) * basis_cache[f_deg][idx, :] + a * basis_cache[
+                    c_deg
+                ][idx, :]
+            return res
+
+        # --- Standard Recurrence Pipeline (Linear, Trigonometric, Hyperbolic) ---
+
+        n_knots = len(self.knots)
         current_basis = np.zeros((n_pts, n_knots - 1))
 
         for i in range(n_knots - 1):
-            # Normal half-open interval: [t_i, t_{i+1})
             is_in_interval = (eval_points >= self.knots[i]) & (
                 eval_points < self.knots[i + 1]
             )
-
-            # Include the right-most boundary point (x = b) in the last valid interval
-            if i == self.n_basis - 1:
+            if i == n_knots - 2:
                 is_in_interval |= eval_points == self.knots[i + 1]
-
             current_basis[:, i] = is_in_interval.astype(float)
 
-        # Iteratively compute higher degrees up to self.degree
         for p in range(1, self.degree + 1):
             next_basis = np.zeros((n_pts, n_knots - 1 - p))
 
             for i in range(n_knots - 1 - p):
-                # Left Term Calculations
-                denom1 = self.knots[i + p] - self.knots[i]
-                if denom1 > 0:
-                    left_factor = (eval_points - self.knots[i]) / denom1
-                    term1 = left_factor * current_basis[:, i]
-                else:
-                    term1 = 0.0
+                if self.weight_type == "linear":
+                    left_factor, right_factor = self._linear_weights(eval_points, i, p)
+                elif self.weight_type == "trigonometric":
+                    left_factor, right_factor = self._trigonometric_weights(
+                        eval_points, i, p
+                    )
+                elif self.weight_type == "hyperbolic":
+                    left_factor, right_factor = self._hyperbolic_weights(
+                        eval_points, i, p
+                    )
 
-                # Right Term Calculations
-                denom2 = self.knots[i + p + 1] - self.knots[i + 1]
-                if denom2 > 0:
-                    right_factor = (self.knots[i + p + 1] - eval_points) / denom2
-                    term2 = right_factor * current_basis[:, i + 1]
-                else:
-                    term2 = 0.0
-
+                term1 = left_factor * current_basis[:, i]
+                term2 = right_factor * current_basis[:, i + 1]
                 next_basis[:, i] = term1 + term2
 
             current_basis = next_basis
 
-        # Return only the first n_basis columns to ensure correct output dimension
         return current_basis[:, : self.n_basis]
 
     def evaluate_derivative(
         self, eval_points: np.ndarray, order: int = 1
     ) -> np.ndarray:
-        r"""
-        Evaluates the derivative of all B-spline basis functions at points x for a given degree order.
-
-        The derivative for the i-th B-spline of degree p is given by:
-        $$\frac{d}{dx}N_{i,p}(x) = p \cdot \left( \frac{N_{i,p-1}(x)}{t_{i+p} - t_i} - \frac{N_{i+1,p-1}(x)}{t_{i+p+1} - t_{i+1}} \right)$$
-
-        Parameters:
-        -----------
-        x : np.ndarray
-            1D array of points where the derivatives are evaluated.
-        order : int
-            The order of the derivative to evaluate.
-
-        Returns:
-        --------
-        np.ndarray
-            A matrix of shape (len(x), n_basis) containing the derivatives.
+        """
+        Evaluates the derivative of all B-spline basis functions at points x for a given order.
         """
 
         if order < 0:
             raise ValueError("Derivative order must be non-negative.")
 
-        # Set up variables
         x = np.asarray(eval_points)
         n_samples = len(x)
 
-        # Base Case 1: Order 0 is just evaluating the basis functions themselves
+        # Base Case: Order 0 is just standard evaluation
         if order == 0:
             return self.evaluate(x)
 
-        # Base Case 2: Order exceeds degree, derivative is 0 everywhere
+        # --- Path A: High-Precision Central Difference for Non-Linear / Variable Weights ---
+        if self.weight_type in ["trigonometric", "hyperbolic", "variable_degree"]:
+            # Small step size optimized for 64-bit floating point precision
+            h = 1e-5
+
+            if order == 1:
+                # 4th-order central difference schema for smooth slope evaluation
+                f_inf2 = self.evaluate(x - 2 * h)
+                f_inf1 = self.evaluate(x - h)
+                f_sup1 = self.evaluate(x + h)
+                f_sup2 = self.evaluate(x + 2 * h)
+                return (-f_sup2 + 8 * f_sup1 - 8 * f_inf1 + f_inf2) / (12 * h)
+
+            elif order == 2:
+                # 4th-order central difference schema for curvature evaluation
+                f_inf2 = self.evaluate(x - 2 * h)
+                f_inf1 = self.evaluate(x - h)
+                f_mid = self.evaluate(x)
+                f_sup1 = self.evaluate(x + h)
+                f_sup2 = self.evaluate(x + 2 * h)
+                return (-f_sup2 + 16 * f_sup1 - 30 * f_mid + 16 * f_inf1 - f_inf2) / (
+                    12 * (h**2)
+                )
+
+            else:
+                # Recursive fallback for higher orders if needed
+                deriv_minus = self.evaluate_derivative(x - h, order=order - 1)
+                deriv_plus = self.evaluate_derivative(x + h, order=order - 1)
+                return (deriv_plus - deriv_minus) / (2 * h)
+
+        # --- Path B: Exact Analytical Recurrence for Standard Linear Splines ---
         if order > self.degree:
             return np.zeros((n_samples, self.n_basis))
 
-        # Compute higher-order derivatives recursively
         t = self.knots
 
-        def _evaluate_raw_basis(x, degree, n_basis_funcs, knots):
-            """Helper method to evaluate arbitrary degree splines on a raw knot vector."""
-
-            n_pts = len(x)
-            n_knots = len(knots)
-
-            current_basis = np.zeros((n_pts, n_knots - 1))
-            for i in range(n_knots - 1):
-                is_in_interval = (x >= knots[i]) & (x < knots[i + 1])
-                if i == n_knots - 2:
-                    is_in_interval |= x == knots[i + 1]
-                current_basis[:, i] = is_in_interval.astype(float)
-
-            for p in range(1, degree + 1):
-                next_basis = np.zeros((n_pts, n_knots - 1 - p))
-                for i in range(n_knots - 1 - p):
-                    denom1 = knots[i + p] - knots[i]
-                    term1 = (
-                        ((x - knots[i]) / denom1) * current_basis[:, i]
-                        if denom1 > 0
-                        else 0.0
-                    )
-
-                    denom2 = knots[i + p + 1] - knots[i + 1]
-                    term2 = (
-                        ((knots[i + p + 1] - x) / denom2) * current_basis[:, i + 1]
-                        if denom2 > 0
-                        else 0.0
-                    )
-
-                    next_basis[:, i] = term1 + term2
-                current_basis = next_basis
-
-            return current_basis[:, :n_basis_funcs]
-
         def _compute_deriv(p_current, current_n_basis):
-            """Helper that recursively matches the derivative definitionon the underlying structural knot indices."""
-
-            # Base case: evaluate the basis functions at the correct lower degree
             if p_current == self.degree - order:
-                # Evaluate the lower degree basis on our EXACT same knot vector.
-                return _evaluate_raw_basis(x, p_current, current_n_basis, t)
+                return self._evaluate_raw_basis(x, p_current, current_n_basis, t)
 
-            # Initialize array for this recursive layer
             deriv = np.zeros((n_samples, current_n_basis))
-
-            # Evaluate the next lower degree layer required for this step
             lower_deriv = _compute_deriv(p_current - 1, current_n_basis + 1)
 
             for i in range(current_n_basis):
-                # Term 1 denominator
                 denom1 = t[i + p_current] - t[i]
                 term1 = (lower_deriv[:, i] / denom1) if denom1 > 0 else 0.0
 
-                # Term 2 denominator
                 denom2 = t[i + p_current + 1] - t[i + 1]
                 term2 = (lower_deriv[:, i + 1] / denom2) if denom2 > 0 else 0.0
 
