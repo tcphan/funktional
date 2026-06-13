@@ -190,6 +190,41 @@ class BSplineBasis(Basis):
             ]
         )
 
+    def _evaluate_raw_basis(self, x, degree, n_basis_funcs, knots):
+        """Helper method to evaluate arbitrary degree splines on a raw knot vector."""
+
+        n_pts = len(x)
+        n_knots = len(knots)
+
+        current_basis = np.zeros((n_pts, n_knots - 1))
+        for i in range(n_knots - 1):
+            is_in_interval = (x >= knots[i]) & (x < knots[i + 1])
+            if i == n_knots - 2:
+                is_in_interval |= x == knots[i + 1]
+            current_basis[:, i] = is_in_interval.astype(float)
+
+        for p in range(1, degree + 1):
+            next_basis = np.zeros((n_pts, n_knots - 1 - p))
+            for i in range(n_knots - 1 - p):
+                denom1 = knots[i + p] - knots[i]
+                term1 = (
+                    ((x - knots[i]) / denom1) * current_basis[:, i]
+                    if denom1 > 0
+                    else 0.0
+                )
+
+                denom2 = knots[i + p + 1] - knots[i + 1]
+                term2 = (
+                    ((knots[i + p + 1] - x) / denom2) * current_basis[:, i + 1]
+                    if denom2 > 0
+                    else 0.0
+                )
+
+                next_basis[:, i] = term1 + term2
+            current_basis = next_basis
+
+        return current_basis[:, :n_basis_funcs]
+
     def _linear_weights(self, eval_points: np.ndarray, i: int, p: int):
         """Calculate the linear weights for the B-spline basis functions.
 
@@ -284,70 +319,56 @@ class BSplineBasis(Basis):
         )
         return left_factor, right_factor
 
-    def _variable_degree_weights(self, eval_points: np.ndarray, i: int):
-        """
-        Calculates variable degree weights where the degree p is a function of x.
-
-        Parameters
-        ----------
-        eval_points : np.ndarray
-            Points at which to evaluate the basis functions.
-        i : int
-            The index of the basis function.
-
-        Returns
-        -------
-        np.ndarray
-            The variable degree weights for the basis function.
-        """
-
-        t = self.knots
-        x = np.asarray(eval_points)
-
-        # Evaluate the degree function at all points
-        p_x = self.p_func(x)  # Vector of floats matching x's length
-
-        # Compute dynamic structural indices safely using array boundaries
-        # Note: t[i + p] becomes non-trivial if index arithmetic uses floats.
-        # Thus, index lookups must use the ceiling integer of the local degree function.
-        p_idx = np.ceil(p_x).astype(int)
-
-        # Vectorized boundary checks across the knot vector arrays
-        denom1 = t[i + p_idx] - t[i]
-        denom2 = t[i + p_idx + 1] - t[i + 1]
-
-        # Calculate left and right factor matrices safely using np.where
-        left_factor = np.where(denom1 > 0, (x - t[i]) / denom1, 0.0)
-        right_factor = np.where(denom2 > 0, (t[i + p_idx + 1] - x) / denom2, 0.0)
-
-        return left_factor, right_factor
-
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
 
         # Convert to numpy array
         eval_points = np.asarray(eval_points)
         n_pts = len(eval_points)
 
-        # Total number of basis functions at degree 0 is len(knots) - 1
-        n_knots = len(self.knots)
+        # --- Handle Variable Degree Splines via Continuous Blending ---
 
-        # Initialize Level 0 Basis Matrix (Degree = 0)
-        # B_shape will contract or adjust as degree increases, but we start with all structural intervals
+        if self.weight_type == "variable_degree":
+            p_values = self.p_func(eval_points)
+            p_floor = np.floor(p_values).astype(int)
+            p_ceil = np.ceil(p_values).astype(int)
+            alpha = p_values - p_floor
+
+            # Use the robust recursive raw basis evaluator built for derivatives
+            basis_cache = {}
+            for deg in np.unique(np.concatenate([p_floor, p_ceil])):
+                if deg <= self.degree:
+                    basis_cache[deg] = self._evaluate_raw_basis(
+                        eval_points, deg, self.n_basis, self.knots
+                    )
+                else:
+                    raise ValueError(
+                        f"Requested variable degree {deg} exceeds maximum configured degree {self.degree}"
+                    )
+
+            # Linearly blend spatial states
+            res = np.zeros((n_pts, self.n_basis))
+            for idx in range(n_pts):
+                f_deg = p_floor[idx]
+                c_deg = p_ceil[idx]
+                a = alpha[idx]
+                res[idx, :] = (1.0 - a) * basis_cache[f_deg][idx, :] + a * basis_cache[
+                    c_deg
+                ][idx, :]
+            return res
+
+        # --- Standard Recurrence Pipeline (Linear, Trigonometric, Hyperbolic) ---
+
+        n_knots = len(self.knots)
         current_basis = np.zeros((n_pts, n_knots - 1))
 
         for i in range(n_knots - 1):
-            # Normal half-open interval: [t_i, t_{i+1})
             is_in_interval = (eval_points >= self.knots[i]) & (
                 eval_points < self.knots[i + 1]
             )
-
-            # Include the right-most boundary point (x = b) in the last valid interval
-            if i == self.n_basis - 1:
+            if i == n_knots - 2:
                 is_in_interval |= eval_points == self.knots[i + 1]
-
             current_basis[:, i] = is_in_interval.astype(float)
 
-        # Iteratively compute higher degrees up to self.degree
         for p in range(1, self.degree + 1):
             next_basis = np.zeros((n_pts, n_knots - 1 - p))
 
@@ -362,14 +383,9 @@ class BSplineBasis(Basis):
                     left_factor, right_factor = self._hyperbolic_weights(
                         eval_points, i, p
                     )
-                elif self.weight_type == "variable_degree":
-                    left_factor, right_factor = self._variable_degree_weights(
-                        eval_points, i, p
-                    )
 
                 term1 = left_factor * current_basis[:, i]
                 term2 = right_factor * current_basis[:, i + 1]
-
                 next_basis[:, i] = term1 + term2
 
             current_basis = next_basis
@@ -416,48 +432,13 @@ class BSplineBasis(Basis):
         # Compute higher-order derivatives recursively
         t = self.knots
 
-        def _evaluate_raw_basis(x, degree, n_basis_funcs, knots):
-            """Helper method to evaluate arbitrary degree splines on a raw knot vector."""
-
-            n_pts = len(x)
-            n_knots = len(knots)
-
-            current_basis = np.zeros((n_pts, n_knots - 1))
-            for i in range(n_knots - 1):
-                is_in_interval = (x >= knots[i]) & (x < knots[i + 1])
-                if i == n_knots - 2:
-                    is_in_interval |= x == knots[i + 1]
-                current_basis[:, i] = is_in_interval.astype(float)
-
-            for p in range(1, degree + 1):
-                next_basis = np.zeros((n_pts, n_knots - 1 - p))
-                for i in range(n_knots - 1 - p):
-                    denom1 = knots[i + p] - knots[i]
-                    term1 = (
-                        ((x - knots[i]) / denom1) * current_basis[:, i]
-                        if denom1 > 0
-                        else 0.0
-                    )
-
-                    denom2 = knots[i + p + 1] - knots[i + 1]
-                    term2 = (
-                        ((knots[i + p + 1] - x) / denom2) * current_basis[:, i + 1]
-                        if denom2 > 0
-                        else 0.0
-                    )
-
-                    next_basis[:, i] = term1 + term2
-                current_basis = next_basis
-
-            return current_basis[:, :n_basis_funcs]
-
         def _compute_deriv(p_current, current_n_basis):
             """Helper that recursively matches the derivative definitionon the underlying structural knot indices."""
 
             # Base case: evaluate the basis functions at the correct lower degree
             if p_current == self.degree - order:
                 # Evaluate the lower degree basis on our EXACT same knot vector.
-                return _evaluate_raw_basis(x, p_current, current_n_basis, t)
+                return self._evaluate_raw_basis(x, p_current, current_n_basis, t)
 
             # Initialize array for this recursive layer
             deriv = np.zeros((n_samples, current_n_basis))
