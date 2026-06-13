@@ -145,6 +145,10 @@ class BSplineBasis(Basis):
         self.weight_type = weight_type.lower()
         self.p_func = p_func
 
+        # Scale frequency so the total width fits nicely within pi radians
+        width = self.domain_range[1] - self.domain_range[0]
+        self.omega = np.pi / width if width > 0 else 1.0
+
         if degree < 0:
             raise ValueError("degree must be a non-negative integer.")
 
@@ -274,15 +278,20 @@ class BSplineBasis(Basis):
         """
 
         t = self.knots
+        w = self.omega
 
         # Component 1: Left Factor Blending
-        denom1 = np.sin((t[i + p] - t[i]) / 2.0)
-        left_factor = np.sin((eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+        denom1 = np.sin(w * (t[i + p] - t[i]) / 2.0)
+        left_factor = (
+            np.sin(w * (eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+        )
 
         # Component 2: Right Factor Blending
-        denom2 = np.sin((t[i + p + 1] - t[i + 1]) / 2.0)
+        denom2 = np.sin(w * (t[i + p + 1] - t[i + 1]) / 2.0)
         right_factor = (
-            np.sin((t[i + p + 1] - eval_points) / 2.0) / denom2 if denom2 > 0 else 0.0
+            np.sin(w * (t[i + p + 1] - eval_points) / 2.0) / denom2
+            if denom2 > 0
+            else 0.0
         )
         return left_factor, right_factor
 
@@ -305,17 +314,20 @@ class BSplineBasis(Basis):
         """
 
         t = self.knots
+        w = self.omega
 
         # Component 1: Left Factor Blending
-        denom1 = np.sinh((t[i + p] - t[i]) / 2.0)
+        denom1 = np.sinh(w * (t[i + p] - t[i]) / 2.0)
         left_factor = (
-            np.sinh((eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
+            np.sinh(w * (eval_points - t[i]) / 2.0) / denom1 if denom1 > 0 else 0.0
         )
 
         # Component 2: Right Factor Blending
-        denom2 = np.sinh((t[i + p + 1] - t[i + 1]) / 2.0)
+        denom2 = np.sinh(w * (t[i + p + 1] - t[i + 1]) / 2.0)
         right_factor = (
-            np.sinh((t[i + p + 1] - eval_points) / 2.0) / denom2 if denom2 > 0 else 0.0
+            np.sinh(w * (t[i + p + 1] - eval_points) / 2.0) / denom2
+            if denom2 > 0
+            else 0.0
         )
         return left_factor, right_factor
 
