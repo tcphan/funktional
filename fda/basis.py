@@ -112,7 +112,11 @@ class BSplineBasis(Basis):
     """B-spline basis functions over a domain."""
 
     def __init__(
-        self, domain_range: tuple[float, float], n_basis: int, degree: int = 3
+        self,
+        domain_range: tuple[float, float],
+        n_basis: int,
+        degree: int = 3,
+        weight_type: str = "linear",
     ):
         """Initialize B-spline basis.
 
@@ -124,17 +128,29 @@ class BSplineBasis(Basis):
             Number of basis functions. Must be greater than `degree`.
         degree : int, default=3
             Degree of the B-splines (e.g., 3 for cubic splines).
+        weight_type : str, default="linear"
+            Type of weights to use for the B-spline basis functions.
+            - "linear": Linear weights.
+            - "trigonometric": Trigonometric weights.
+            - "hyperbolic": Hyperbolic weights
+            - "NURBS": NURBS weights.
         """
+
         super().__init__(domain_range, n_basis)
+        self.degree = int(degree)
+        self._setup_knots()
+        self.weight_type = weight_type.lower()
+
         if degree < 0:
             raise ValueError("degree must be a non-negative integer.")
         if n_basis <= degree:
             raise ValueError(
                 f"n_basis ({n_basis}) must be greater than degree ({degree})."
             )
-
-        self.degree = int(degree)
-        self._setup_knots()
+        if self.weight_type not in ["linear", "trigonometric", "hyperbolic", "nurbs"]:
+            raise ValueError(
+                f"weight_type ({self.weight_type}) must be one of 'linear', 'trigonometric', 'hyperbolic', or 'nurbs'."
+            )
 
     def _setup_knots(self):
         """Setup the knot vector for B-splines."""
@@ -157,6 +173,34 @@ class BSplineBasis(Basis):
                 np.repeat(b, self.degree + 1),
             ]
         )
+
+    def _linear_weights(self, eval_points: np.ndarray, i: int, p: int):
+        """Calculate the linear weights for the B-spline basis functions.
+
+        Parameters
+        ----------
+        eval_points : np.ndarray
+            Points at which to evaluate the basis functions.
+        i : int
+            The index of the basis function.
+        p : int
+            The degree of the basis function.
+
+        Returns
+        -------
+        np.ndarray
+            The linear weights for the basis function.
+        """
+
+        denom1 = self.knots[i + p] - self.knots[i]
+        denom2 = self.knots[i + p + 1] - self.knots[i + 1]
+
+        left_factor = (eval_points - self.knots[i]) / denom1 if denom1 > 0 else 0.0
+        right_factor = (
+            (self.knots[i + p + 1] - eval_points) / denom2 if denom2 > 0 else 0.0
+        )
+
+        return left_factor, right_factor
 
     def evaluate(self, eval_points: np.ndarray) -> np.ndarray:
 
@@ -188,27 +232,26 @@ class BSplineBasis(Basis):
             next_basis = np.zeros((n_pts, n_knots - 1 - p))
 
             for i in range(n_knots - 1 - p):
-                # Left Term Calculations
-                denom1 = self.knots[i + p] - self.knots[i]
-                if denom1 > 0:
-                    left_factor = (eval_points - self.knots[i]) / denom1
-                    term1 = left_factor * current_basis[:, i]
-                else:
-                    term1 = 0.0
+                if self.weight_type == "linear":
+                    left_factor, right_factor = self._linear_weights(eval_points, i, p)
+                elif self.weight_type == "trigonometric":
+                    left_factor, right_factor = self._trigonometric_weights(
+                        eval_points, i, p
+                    )
+                elif self.weight_type == "hyperbolic":
+                    left_factor, right_factor = self._hyperbolic_weights(
+                        eval_points, i, p
+                    )
+                elif self.weight_type == "nurbs":
+                    left_factor, right_factor = self._nurbs_weights(eval_points, i, p)
 
-                # Right Term Calculations
-                denom2 = self.knots[i + p + 1] - self.knots[i + 1]
-                if denom2 > 0:
-                    right_factor = (self.knots[i + p + 1] - eval_points) / denom2
-                    term2 = right_factor * current_basis[:, i + 1]
-                else:
-                    term2 = 0.0
+                term1 = left_factor * current_basis[:, i]
+                term2 = right_factor * current_basis[:, i + 1]
 
                 next_basis[:, i] = term1 + term2
 
             current_basis = next_basis
 
-        # Return only the first n_basis columns to ensure correct output dimension
         return current_basis[:, : self.n_basis]
 
     def evaluate_derivative(
