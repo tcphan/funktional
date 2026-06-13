@@ -2,10 +2,12 @@ import numpy as np
 from scipy.integrate import simpson, cumtrapz
 from scipy.optimize import minimize
 
+
 class warpingFunction:
     """
     Base class for warping functions.
     """
+
     def __init__(self, t_grid):
         self.t_grid = t_grid
         self.t_min = t_grid[0]
@@ -37,7 +39,7 @@ class powerWarp(warpingFunction):
         gamma : float
             The warping function parameter.
             Must be strictly positive (gamma > 0).
-            
+
         Interpretations:
         ----------------
             - gamma > 1: expands the beginning of the curve and compresses the end (shifts curve left)
@@ -51,13 +53,13 @@ class powerWarp(warpingFunction):
 
         # Ensure gamma is positive
         gamma = max(1e-3, gamma)
-        
+
         # Normalize the time grid to [0, 1]
         t_norm = (self.t_grid - self.t_min) / (self.t_max - self.t_min)
-        
+
         # Apply power transformation
-        h_norm = t_norm ** gamma
-        
+        h_norm = t_norm**gamma
+
         # Rescale back to original time domain
         return self.t_min + (self.t_max - self.t_min) * h_norm
 
@@ -71,6 +73,7 @@ class mobiusWarp(warpingFunction):
     t_grid : array_like
         The time grid.
     """
+
     def __init__(self, t_grid):
         super().__init__(t_grid)
 
@@ -96,21 +99,21 @@ class mobiusWarp(warpingFunction):
         """
         # Ensure f is strictly monotonic
         f = np.clip(f, -0.99, 0.99)
-        
+
         # Normalize the time grid to [0, 1]
         t_norm = (self.t_grid - self.t_min) / (self.t_max - self.t_min)
-        
+
         # Apply Möbius transformation
         h_norm = t_norm / (f * t_norm + (1 - f))
-        
+
         # Rescale back to original time domain
         return self.t_min + (self.t_max - self.t_min) * h_norm
 
 
 class ramsayWarp(warpingFunction):
     """
-    Ramsay's basis transformation warping function. Rather than forcing the warping function 
-    to be strictly monotonic through constraints, Ramsay's method models the transformation as the 
+    Ramsay's basis transformation warping function. Rather than forcing the warping function
+    to be strictly monotonic through constraints, Ramsay's method models the transformation as the
     cumulative integral of a positive function. This ensures monotonicity without explicit constraints.
 
     Parameters
@@ -118,7 +121,7 @@ class ramsayWarp(warpingFunction):
     t_grid : array_like
         The time grid.
     """
-    
+
     def __init__(self, t_grid, basis_object):
         super().__init__(t_grid)
         self.basis_object = basis_object
@@ -140,21 +143,21 @@ class ramsayWarp(warpingFunction):
 
         # Ensure coefficients are a numpy array
         coefficients = np.asarray(coefficients)
-        
+
         # Get the basis function values
         basis_values = self.basis_object.evaluate(self.t_grid)
-        
+
         # W(t) is an unconstrained linear combination of basis functions
         W = basis_values @ coefficients
-        
+
         # exp(W(t)) is guaranteed to be strictly positive
         exp_W = np.exp(W)
-        
+
         # Cumulative integral for the numerator, total integral for denominator
         # cumtrapz is used to get the running integral value at each point on the grid
         numerator = cumtrapz(exp_W, self.t_grid, initial=0)
         denominator = simpson(exp_W, x=self.t_grid)
-        
+
         # Normalize and scale to boundaries
         h_t = self.t_min + (self.t_max - self.t_min) * (numerator / denominator)
         return h_t
@@ -165,7 +168,17 @@ class curveRegistration:
     Class for registering curves to a target curve.
     """
 
-    def __init__(self, t_grid, x_basis, target_basis, x_coefs, target_coefs, warping_method, lam = 0.0, **kwargs):
+    def __init__(
+        self,
+        t_grid,
+        x_basis,
+        target_basis,
+        x_coefs,
+        target_coefs,
+        warping_method,
+        lam=0.0,
+        **kwargs,
+    ):
         """
         Initialize the curveRegistration class.
 
@@ -189,7 +202,6 @@ class curveRegistration:
             Additional keyword arguments.
         """
 
-
         self.t_grid = t_grid
         self.t_min = t_grid[0]
         self.t_max = t_grid[-1]
@@ -203,13 +215,16 @@ class curveRegistration:
         # Ensure valid warping method is provided
         valid_warping_methods = ["power", "mobius", "ramsay"]
         if self.warping_method not in valid_warping_methods:
-            raise ValueError(f"Invalid warping method '{warping_method}'. Choose from {valid_warping_methods}.")
+            raise ValueError(
+                f"Invalid warping method '{warping_method}'. Choose from {valid_warping_methods}."
+            )
 
         # Ensure basis object is provided for Ramsay warping
         self.ramsay_basis = kwargs.get("ramsay_basis", None)
         if (self.warping_method == "ramsay") and (self.ramsay_basis is None):
-            raise ValueError("Ramsay warping requires a basis object. Please provide one under the keyword argument 'ramsay_basis'.")
-
+            raise ValueError(
+                "Ramsay warping requires a basis object. Please provide one under the keyword argument 'ramsay_basis'."
+            )
 
     def _get_default_initial_guess(self):
         """
@@ -219,17 +234,16 @@ class curveRegistration:
         if self.warping_method == "power":
             # gamma = 1.0 means t^1 = t (Identity)
             return np.array([1.0])
-            
+
         elif self.warping_method == "mobius":
             # f = 0.0 means t / (0 + 1) = t (Identity)
             return np.array([0.0])
-            
+
         elif self.warping_method == "ramsay":
             # Ramsay's basis matrix shape depends on how many basis functions x_basis has
             num_basis = self.ramsay_basis.n_basis
             # Zero coefficients mean exp(0) = 1 (constant), integrating to a linear line (Identity)
             return np.zeros(num_basis)
-
 
     def _warping_function(self, warping_params):
         """
@@ -259,7 +273,7 @@ class curveRegistration:
         ----------------
         For Power and Mobius, because they rely on a scalar parameter (gamma and f respectively), the penalty is based on deviations from their
         respective identity values, which represents the least amount of warping.
-        
+
         For Ramsay, because it uses a basis expansion to model the warping function, the penalty is based on the squared second derivative of the warping
         function, which penalizes roughness or deviations from a straight line (identity).
 
@@ -272,11 +286,11 @@ class curveRegistration:
         if self.warping_method == "power":
             # Penalize deviation from gamma = 1.0 (identity)
             return (coefficients[0] - 1.0) ** 2
-        
+
         if self.warping_method == "mobius":
             # Penalize deviation from f = 0.0 (identity)
-            return (coefficients[0] ** 2)
-        
+            return coefficients[0] ** 2
+
         if self.warping_method == "ramsay":
             # Calculate the second derivative for smoothness penalty
             h_t = self._warping_function(coefficients)
@@ -286,7 +300,6 @@ class curveRegistration:
             # Smoothness penalty (squared L2 norm)
             smoothness_penalty = np.sum(h_prime_prime**2) * dt
             return smoothness_penalty
-    
 
     def regsse(self, coefficients):
         r"""
@@ -294,14 +307,14 @@ class curveRegistration:
         The REGSSE measures how well a warping function h(t) aligns a subject curve x(t) with the target curve \mu(t).
         A penalty term R(h) is added to the REGSSE to ensure the warping function is smooth and to prevent excessive stretching or compressing.
         The lambda parameter controls the amount of regularization: a larger lambda will result in a smoother warping function.
-        
+
         REGSSE = integral_{t_a}^{t_b} [x(h(t)) - \mu(t)]^2 dt + lambda * R(h)
 
         Parameters
         ----------
         coefficients : array_like
             Parameters required for the warping function (e.g., gamma for power, f for Möbius, or coefficients for Ramsay).
-            
+
         Returns:
         --------
         sse : float
@@ -310,17 +323,17 @@ class curveRegistration:
 
         # Evaluate warping function on the fine grid
         h_t = self._warping_function(coefficients)
-        
+
         # Ensure h(t) is strictly increasing and within bounds
         h_t = np.clip(h_t, self.t_grid[0], self.t_grid[-1])
-        
+
         # Evaluate the registered (warped) curve: x_i(h_i(t))
         mu_t = self.target_basis.evaluate(self.t_grid) @ self.target_coefs
         x_registered = self.x_basis.evaluate(h_t) @ self.x_coefs
 
         # Compute the squared differences
         squared_errors = (x_registered - mu_t) ** 2
-        
+
         # Integrate over the domain using Simpson's rule to get the SSE
         sse = simpson(squared_errors, x=self.t_grid)
 
@@ -329,17 +342,17 @@ class curveRegistration:
 
         return sse + self.lam * penalty
 
-    def optimize(self, initial_guess=None, optimization_method='L-BFGS-B'):
+    def optimize(self, initial_guess=None, optimization_method="L-BFGS-B"):
         """
         Optimizes the warping function to minimize the REGSSE.
-        
+
         Parameters:
         -----------
         initial_guess : array-like
             The initial guess for the warping function coefficients.
         optimization_method : str
             The optimization method to use.
-            
+
         Returns:
         --------
         result : OptimizeResult
@@ -361,10 +374,214 @@ class curveRegistration:
 
         # Minimize the REGSSE
         result = minimize(
-            fun=self.regsse,                    # Registration SSE objective function
-            x0=initial_guess,                   # Initial guess
-            method=optimization_method,         # Optimization method
-            bounds=bounds                       # Boundaries for the warping function parameters
+            fun=self.regsse,  # Registration SSE objective function
+            x0=initial_guess,  # Initial guess
+            method=optimization_method,  # Optimization method
+            bounds=bounds,  # Boundaries for the warping function parameters
         )
         return result
-    
+
+
+class GroupwiseCurveRegistration:
+    """
+    Performs functional data registration for a group of curves by minimizing the distance between all wapred curves and their joint sample mean.
+    """
+
+    def __init__(
+        self,
+        t_grid,
+        x_basis,
+        x_coefs_matrix,
+        warping_method="ramsay",
+        lam=0.0,
+        **kwargs,
+    ):
+        """
+        Parameters:
+        -----------
+        t_grid : array_like
+            The shared time grid for evaluations.
+        x_basis : Basis object
+            The shared basis function space used to evaluate all subject curves.
+        x_coefs_matrix : array_like
+            A 2D array or matrix of shape (n_curves, n_basis), where each row
+            contains the basis coefficients for one functional observation.
+        warping_method : str
+            The method used to warp time ('power', 'mobius', or 'ramsay').
+        lam : float
+            Regularization factor for warping roughness.
+        """
+
+        self.t_grid = np.asarray(t_grid)
+        self.t_min = t_grid[0]
+        self.t_max = t_grid[-1]
+        self.x_basis = x_basis
+        self.x_coefs_matrix = np.asarray(x_coefs_matrix)
+        self.n_curves = self.x_coefs_matrix.shape[0]
+        self.warping_method = warping_method.lower()
+        self.lam = lam
+        self.kwargs = kwargs
+
+        # Ensure valid warping method is provided
+        valid_warping_methods = ["power", "mobius", "ramsay"]
+        if self.warping_method not in valid_warping_methods:
+            raise ValueError(
+                f"Invalid warping method '{warping_method}'. Choose from {valid_warping_methods}."
+            )
+
+        # Ensure basis object is provided for Ramsay warping
+        self.ramsay_basis = kwargs.get("ramsay_basis", None)
+        if (self.warping_method == "ramsay") and (self.ramsay_basis is None):
+            raise ValueError(
+                "Ramsay warping requires a basis object. Please provide one under the keyword argument 'ramsay_basis'."
+            )
+
+        # Instantiate separate warping factory functions for each curve
+        self._warping_function()
+
+        # Precompute roughness penalty matrices if applying Ramsay warping
+        self.R_matrix = None
+        if self.warping_method == "ramsay":
+            self.R_matrix = self._compute_ramsay_penalty_matrix(self.ramsay_basis)
+
+    def _get_params_per_curve(self):
+        """Determines the number of optimized parameters required per curve."""
+
+        if self.warping_method in ["power", "mobius"]:
+            return 1
+        elif self.warping_method == "ramsay":
+            return self.ramsay_basis.n_basis
+
+    def _get_default_initial_guess(self):
+        """Gets the default initial guess for the optimization parameters."""
+
+        p = self._get_params_per_curve()
+
+        if self.warping_method == "power":
+            # gamma = 1.0 means t^1 = t (Identity)
+            return np.array([1.0])
+        elif self.warping_method == "mobius":
+            # f = 0.0 means t / (0 + 1) = t (Identity)
+            return np.array([0.0])
+        elif self.warping_method == "ramsay":
+            # Zero coefficients mean exp(0) = 1 (constant), integrating to a linear line (Identity)
+            return np.zeros(p)
+
+    def _warping_function(self):
+        """Creates a list of warping objects, one for each curve in the sample."""
+
+        self.warping_objects = []
+        for _ in range(self.n_curves):
+            if self.warping_method == "power":
+                self.warping_objects.append(powerWarp(self.t_grid))
+            elif self.warping_method == "mobius":
+                self.warping_objects.append(mobiusWarp(self.t_grid))
+            elif self.warping_method == "ramsay":
+                self.warping_objects.append(ramsayWarp(self.t_grid, self.ramsay_basis))
+
+    def _compute_ramsay_penalty_matrix(self, basis):
+        """Computes the integrated squared second derivative matrix for Ramsay warping."""
+
+        n_basis = basis.n_basis
+        R = np.zeros((n_basis, n_basis))
+        eval_grid = np.linspace(self.t_min, self.t_max, 100)
+        d2_basis = None
+
+        # Safe fallback method checking for derivative generation
+        if hasattr(basis, "evaluate_derivative"):
+            d2_basis = basis.evaluate_derivative(eval_grid, order=2)
+
+        if d2_basis is None:
+            # Simple second-order central finite difference approximation if missing
+            dt = eval_grid[1] - eval_grid[0]
+            base_eval = basis.evaluate(eval_grid)
+            d2_basis = np.gradient(np.gradient(base_eval, dt, axis=0), dt, axis=0)
+
+        for i in range(n_basis):
+            for j in range(n_basis):
+                R[i, j] = simpson(d2_basis[:, i] * d2_basis[:, j], x=eval_grid)
+        return R
+
+    def group_regsse(self, flat_coefficients):
+        """
+        Objective function evaluating global misalignment variance across
+        all registered observations relative to their evolving sample mean.
+        """
+
+        p = self._get_params_per_curve()
+        # Reshape flat array from optimizer to a structured matrix: (n_curves, n_params)
+        coef_matrix = flat_coefficients.reshape(self.n_curves, p)
+
+        # Generate all warped curves
+        warped_curves = np.zeros((len(self.t_grid), self.n_curves))
+        total_penalty = 0.0
+
+        for i in range(self.n_curves):
+            curve_coefs = coef_matrix[i, :]
+            warp_obj = self.warping_objects[i]
+
+            # Compute warped timeline h_i(t)
+            h_t = warp_obj.warp(curve_coefs)
+            h_t = np.clip(h_t, self.t_grid[0], self.t_grid[-1])
+
+            # Reconstruct registered curve profile: x_i(h_i(t))
+            warped_curves[:, i] = self.x_basis.evaluate(h_t) @ self.x_coefs_matrix[i, :]
+
+            # Compute roughness penalty accumulation
+            if self.warping_method == "ramsay" and self.R_matrix is not None:
+                total_penalty += curve_coefs @ self.R_matrix @ curve_coefs
+            elif self.warping_method == "power":
+                total_penalty += (curve_coefs[0] - 1.0) ** 2
+            elif self.warping_method == "mobius":
+                total_penalty += curve_coefs[0] ** 2
+
+        # Compute the functional population sample mean curve: \mu_bar(t)
+        sample_mean_curve = np.mean(warped_curves, axis=1, keepdims=True)
+
+        # Calculate distance between each shifted curve and the sample mean
+        # Element-wise variance across the columns at each time-point step
+        squared_deviations = (warped_curves - sample_mean_curve) ** 2
+
+        # Integrate variance over time domain
+        total_alignment_loss = 0.0
+        for i in range(self.n_curves):
+            total_alignment_loss += simpson(squared_deviations[:, i], x=self.t_grid)
+
+        return total_alignment_loss + (self.lam * total_penalty)
+
+    def optimize(self, initial_guess=None, optimization_method="L-BFGS-B"):
+        """Runs joint population alignment optimization."""
+
+        # Construct initial guesses for all curves concurrently
+        if initial_guess is None:
+            initial_guess = self._get_default_initial_guess()
+        else:
+            initial_guess = np.atleast_1d(initial_guess)
+
+        # Set bounds based on warping method to prevent mathematical blow-ups
+        bounds_single = None
+        p = self._get_params_per_curve()
+        if self.warping_method == "power":
+            bounds_single = [(1e-3, 10.0)]
+        elif self.warping_method == "mobius":
+            bounds_single = [(-0.99, 0.99)]
+        elif self.warping_method == "ramsay":
+            bounds_single = [(None, None)] * p
+
+        # Tile across all curves to build global flat tracking spaces
+        global_initial_guess = np.tile(initial_guess, self.n_curves)
+        global_bounds = (
+            bounds_single * self.n_curves if bounds_single[0][0] is not None else None
+        )
+
+        # Minimize the REGSSE
+        result = minimize(
+            fun=self.group_regsse,
+            x0=global_initial_guess,
+            method=optimization_method,
+            bounds=global_bounds,
+        )
+
+        # Reshape the flat optimized output into an easy-to-read matrix representation
+        result.x_matrix = result.x.reshape(self.n_curves, p)
+        return result
