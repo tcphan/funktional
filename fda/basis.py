@@ -118,6 +118,7 @@ class BSplineBasis(Basis):
         degree: int = 3,
         weight_type: str = "linear",
         p_func=None,
+        nurbs_weights: np.ndarray = None,
     ):
         """Initialize B-spline basis.
 
@@ -135,8 +136,11 @@ class BSplineBasis(Basis):
             - "trigonometric": Trigonometric weights.
             - "hyperbolic": Hyperbolic weights
             - "variable_degree": Variable degree or fractional weighting where the degree p is a function of x.
+            - "nurbs": Non-Uniform Rational B-spline basis functions.
         p_func : callable, default=None
             Function that computes the degree as a function of x. This is only used when weight_type is "variable_degree".
+        nurbs_weights : np.ndarray, default=None
+            Weights for the NURBS basis functions. This is only used when weight_type is "nurbs".
         """
 
         super().__init__(domain_range, n_basis)
@@ -162,6 +166,7 @@ class BSplineBasis(Basis):
             "trigonometric",
             "hyperbolic",
             "variable_degree",
+            "nurbs",
         ]:
             raise ValueError(
                 f"weight_type ({self.weight_type}) must be one of 'linear', 'trigonometric', 'hyperbolic', or 'variable_degree'."
@@ -171,6 +176,16 @@ class BSplineBasis(Basis):
             raise ValueError(
                 "p_func must be provided when weight_type is 'variable_degree'."
             )
+
+        if self.weight_type == "nurbs":
+            if nurbs_weights is None:
+                self.nurbs_weights = np.ones(self.n_basis, dtype=float)
+            else:
+                if len(nurbs_weights) != self.n_basis:
+                    raise ValueError(
+                        f"nurbs_weights must be of same length as n_basis ({self.n_basis})."
+                    )
+                self.nurbs_weights = np.asarray(nurbs_weights, dtype=float)
 
     def _setup_knots(self):
         """Setup the knot vector for B-splines."""
@@ -217,7 +232,7 @@ class BSplineBasis(Basis):
             next_basis = np.zeros((n_pts, n_knots - 1 - p))
             for i in range(n_knots - 1 - p):
                 # --- Branch A: Standard Linear Weights ---
-                if self.weight_type == "linear":
+                if self.weight_type in ["linear", "nurbs"]:
                     denom1 = knots[i + p] - knots[i]
                     left_factor = (x - knots[i]) / denom1 if denom1 > 0 else 0.0
 
@@ -242,11 +257,7 @@ class BSplineBasis(Basis):
 
                 # --- Branch C: Hyperbolic Weights ---
                 elif self.weight_type == "hyperbolic":
-                    denom1 = (
-                        np.path.sinh(w * (knots[i + p] - knots[i]) / 2.0)
-                        if hasattr(np.path, "sinh")
-                        else np.sinh(w * (knots[i + p] - knots[i]) / 2.0)
-                    )
+                    denom1 = np.sinh(w * (knots[i + p] - knots[i]) / 2.0)
                     left_factor = (
                         np.sinh(w * (x - knots[i]) / 2.0) / denom1
                         if denom1 > 0
@@ -275,7 +286,18 @@ class BSplineBasis(Basis):
 
             current_basis = next_basis
 
-        return current_basis[:, :n_basis_funcs]
+        raw_basis = current_basis[:, :n_basis_funcs]
+
+        # --- NURBS Weighting ---
+
+        if self.weight_type == "nurbs":
+            w = self.nurbs_weights[:n_basis_funcs]
+            weighted_basis = raw_basis * w
+            denominator = np.sum(weighted_basis, axis=1, keepdims=True)
+            denominator = np.where(denominator == 0, 1.0, denominator)
+            return weighted_basis / denominator
+
+        return raw_basis
 
     def _linear_weights(self, eval_points: np.ndarray, i: int, p: int):
         """Calculate the linear weights for the B-spline basis functions.
@@ -433,7 +455,7 @@ class BSplineBasis(Basis):
             next_basis = np.zeros((n_pts, n_knots - 1 - p))
 
             for i in range(n_knots - 1 - p):
-                if self.weight_type == "linear":
+                if self.weight_type in ["linear", "nurbs"]:
                     left_factor, right_factor = self._linear_weights(eval_points, i, p)
                 elif self.weight_type == "trigonometric":
                     left_factor, right_factor = self._trigonometric_weights(
@@ -450,7 +472,26 @@ class BSplineBasis(Basis):
 
             current_basis = next_basis
 
-        return current_basis[:, : self.n_basis]
+        # Extract the base functions matching our basis count
+        raw_basis = current_basis[:, : self.n_basis]
+
+        # --- NURBS Weighting Pipeline ---
+
+        if self.weight_type == "nurbs":
+            # Multiply each basis column by its corresponding NURBS weight
+            weighted_basis = (
+                raw_basis * self.nurbs_weights
+            )  # Broadcasting shape: (n_pts, n_basis)
+
+            # Compute the denominator (sum of weighted basis functions at each point)
+            denominator = np.sum(weighted_basis, axis=1, keepdims=True)
+
+            # Avoid division by zero (for safety near boundaries or unweighted regions)
+            denominator = np.where(denominator == 0, 1.0, denominator)
+
+            return weighted_basis / denominator
+
+        return raw_basis
 
     def evaluate_derivative(
         self, eval_points: np.ndarray, order: int = 1
@@ -470,7 +511,12 @@ class BSplineBasis(Basis):
             return self.evaluate(x)
 
         # --- Path A: High-Precision Central Difference for Non-Linear / Variable Weights ---
-        if self.weight_type in ["trigonometric", "hyperbolic", "variable_degree"]:
+        if self.weight_type in [
+            "trigonometric",
+            "hyperbolic",
+            "variable_degree",
+            "nurbs",
+        ]:
             # Small step size optimized for 64-bit floating point precision
             h = 1e-5
 
